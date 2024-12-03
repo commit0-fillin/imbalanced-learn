@@ -19,4 +19,20 @@ def test_iht_estimator_pipeline():
     Non-regression test for:
     https://github.com/scikit-learn-contrib/imbalanced-learn/pull/1049
     """
-    pass
+    # Create a pipeline with a classifier
+    clf_pipeline = make_pipeline(NB())
+    
+    # Create an InstanceHardnessThreshold object with the pipeline
+    iht = InstanceHardnessThreshold(estimator=clf_pipeline, random_state=RND_SEED)
+    
+    # Fit and resample
+    X_resampled, y_resampled = iht.fit_resample(X, Y)
+    
+    # Check that resampling occurred (fewer samples than original)
+    assert len(X_resampled) < len(X)
+    assert len(y_resampled) < len(Y)
+    
+    # Check that the class distribution has changed
+    unique, counts = np.unique(y_resampled, return_counts=True)
+    assert len(unique) == len(np.unique(Y))  # All classes are still present
+    assert not np.all(counts == np.unique(Y, return_counts=True)[1])  # Counts have changed
