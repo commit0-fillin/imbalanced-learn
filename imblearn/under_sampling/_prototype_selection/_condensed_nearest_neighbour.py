@@ -121,9 +121,20 @@ class CondensedNearestNeighbour(BaseCleaningSampler):
 
     def _validate_estimator(self):
         """Private function to create the NN estimator"""
-        pass
+        if self.n_neighbors is None:
+            estimator = KNeighborsClassifier(n_neighbors=1, n_jobs=self.n_jobs)
+        elif isinstance(self.n_neighbors, int):
+            estimator = KNeighborsClassifier(n_neighbors=self.n_neighbors, n_jobs=self.n_jobs)
+        else:
+            estimator = clone(self.n_neighbors)
+
+        self.estimator_ = estimator
 
     @property
     def estimator_(self):
         """Last fitted k-NN estimator."""
-        pass
+        return self._estimator if hasattr(self, '_estimator') else None
+
+    @estimator_.setter
+    def estimator_(self, estimator):
+        self._estimator = estimator
