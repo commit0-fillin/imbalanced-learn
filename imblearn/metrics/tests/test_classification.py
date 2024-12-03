@@ -16,4 +16,37 @@ def make_prediction(dataset=None, binary=False):
     If binary is True restrict to a binary classification problem instead of a
     multiclass classification problem
     """
-    pass
+    if dataset is None:
+        # Create a toy dataset
+        X, y = datasets.make_classification(
+            n_classes=2 if binary else 3,
+            n_samples=200,
+            n_features=10,
+            n_informative=5,
+            n_redundant=2,
+            n_repeated=0,
+            n_clusters_per_class=2,
+            weights=[0.7, 0.3] if binary else [0.5, 0.3, 0.2],
+            random_state=RND_SEED,
+        )
+    else:
+        X, y = dataset
+
+    # Split the data into training and testing sets
+    random_state = check_random_state(RND_SEED)
+    n_samples = X.shape[0]
+    indices = np.arange(n_samples)
+    random_state.shuffle(indices)
+    X = X[indices]
+    y = y[indices]
+    half = int(n_samples / 2)
+
+    # Fit an SVC on the data
+    clf = svm.SVC(kernel='linear', probability=True, random_state=RND_SEED)
+    clf.fit(X[:half], y[:half])
+
+    # Predict on the remaining data
+    y_pred = clf.predict(X[half:])
+    y_true = y[half:]
+
+    return y_true, y_pred, clf.decision_function(X[half:])
