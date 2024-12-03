@@ -119,4 +119,15 @@ class ADASYN(BaseOverSampler):
 
     def _validate_estimator(self):
         """Create the necessary objects for ADASYN"""
-        pass
+        self.nn_ = check_neighbors_object(
+            'n_neighbors', self.n_neighbors, additional_neighbor=1
+        )
+        if self.n_jobs is not None:
+            warnings.warn(
+                "The parameter `n_jobs` has been deprecated in 0.10 and will be "
+                "removed in 0.12. To configure the number of jobs of the nearest "
+                "neighbors estimator, use `ADASYN(n_neighbors="
+                "NearestNeighbors(n_jobs=...))`.",
+                FutureWarning,
+            )
+            self.nn_.set_params(n_jobs=self.n_jobs)
