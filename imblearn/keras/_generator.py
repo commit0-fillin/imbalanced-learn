@@ -5,7 +5,15 @@ def import_keras():
 
     This is possible to import the sequence from keras or tensorflow.
     """
-    pass
+    try:
+        from keras.utils import Sequence
+        return Sequence, True
+    except ImportError:
+        try:
+            from tensorflow.keras.utils import Sequence
+            return Sequence, True
+        except ImportError:
+            return object, False
 ParentClass, HAS_KERAS = import_keras()
 from scipy.sparse import issparse
 from sklearn.base import clone
@@ -193,4 +201,20 @@ def balanced_batch_generator(X, y, *, sample_weight=None, sampler=None, batch_si
     ...                              steps_per_epoch=steps_per_epoch,
     ...                              epochs=10, verbose=0)
     """
-    pass
+    if sampler is None:
+        sampler = RandomUnderSampler(random_state=random_state)
+    
+    if not hasattr(sampler, 'fit_resample'):
+        raise ValueError("'sampler' should have a 'fit_resample' method.")
+    
+    sampler_ = clone(sampler)
+    X_resampled, y_resampled = sampler_.fit_resample(X, y)
+    
+    if sample_weight is not None:
+        sample_weight_resampled = _safe_indexing(sample_weight, sampler_.sample_indices_)
+    else:
+        sample_weight_resampled = None
+    
+    return tf_bbg(X_resampled, y_resampled, sample_weight=sample_weight_resampled,
+                  batch_size=batch_size, keep_sparse=keep_sparse,
+                  random_state=random_state)
