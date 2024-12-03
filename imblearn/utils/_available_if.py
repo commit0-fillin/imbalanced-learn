@@ -79,6 +79,8 @@ if sklearn_version < parse_version('1.1'):
         >>> obj.say_hello()
         Hello
         """
-        pass
+        def decorator(func):
+            return _AvailableIfDescriptor(func, check, func.__name__)
+        return decorator
 else:
     from sklearn.utils.metaestimators import available_if
