@@ -105,5 +105,32 @@ class SMOTETomek(BaseSampler):
         self.n_jobs = n_jobs
 
     def _validate_estimator(self):
-        """Private function to validate SMOTE and ENN objects"""
-        pass
+        """Private function to validate SMOTE and Tomek objects"""
+        if self.smote is None:
+            self.smote_ = SMOTE(
+                sampling_strategy=self.sampling_strategy,
+                random_state=self.random_state,
+                k_neighbors=5,
+                n_jobs=self.n_jobs,
+            )
+        elif isinstance(self.smote, SMOTE):
+            self.smote_ = clone(self.smote)
+        else:
+            raise ValueError(
+                f"`smote` has to be a `SMOTE` object or None. "
+                f"Got {type(self.smote)} instead."
+            )
+
+        if self.tomek is None:
+            self.tomek_ = TomekLinks(
+                sampling_strategy="all", n_jobs=self.n_jobs
+            )
+        elif isinstance(self.tomek, TomekLinks):
+            self.tomek_ = clone(self.tomek)
+        else:
+            raise ValueError(
+                f"`tomek` has to be a `TomekLinks` object or None. "
+                f"Got {type(self.tomek)} instead."
+            )
+
+        self.smote_.set_params(**{"sampling_strategy": self.sampling_strategy})
