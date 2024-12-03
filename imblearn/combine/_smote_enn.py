@@ -108,4 +108,34 @@ class SMOTEENN(BaseSampler):
 
     def _validate_estimator(self):
         """Private function to validate SMOTE and ENN objects"""
-        pass
+        if self.smote is None:
+            self.smote_ = SMOTE(
+                sampling_strategy=self.sampling_strategy,
+                random_state=self.random_state,
+                k_neighbors=5,
+                n_jobs=self.n_jobs,
+            )
+        elif isinstance(self.smote, SMOTE):
+            self.smote_ = clone(self.smote)
+        else:
+            raise ValueError(
+                f"`smote` has to be a `SMOTE` object or None. "
+                f"Got {type(self.smote)} instead."
+            )
+
+        if self.enn is None:
+            self.enn_ = EditedNearestNeighbours(
+                sampling_strategy="all",
+                n_neighbors=3,
+                kind_sel="all",
+                n_jobs=self.n_jobs,
+            )
+        elif isinstance(self.enn, EditedNearestNeighbours):
+            self.enn_ = clone(self.enn)
+        else:
+            raise ValueError(
+                f"`enn` has to be an `EditedNearestNeighbours` object or None. "
+                f"Got {type(self.enn)} instead."
+            )
+
+        self.smote_.set_params(**{"sampling_strategy": self.sampling_strategy})
