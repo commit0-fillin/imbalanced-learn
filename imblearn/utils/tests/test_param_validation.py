@@ -16,7 +16,7 @@ from imblearn.utils.fixes import _fit_context
 @validate_params({'a': [Real], 'b': [Real], 'c': [Real], 'd': [Real]}, prefer_skip_nested_validation=True)
 def _func(a, b=0, *args, c, d=0, **kwargs):
     """A function to test the validation of functions."""
-    pass
+    return a + b + c + d
 
 class _Class:
     """A class to test the _InstancesOf constraint and the validation of methods."""
@@ -24,13 +24,13 @@ class _Class:
     @validate_params({'a': [Real]}, prefer_skip_nested_validation=True)
     def _method(self, a):
         """A validated method"""
-        pass
+        return a * 2
 
     @deprecated()
     @validate_params({'a': [Real]}, prefer_skip_nested_validation=True)
     def _deprecated_method(self, a):
         """A deprecated validated method"""
-        pass
+        return a + 1
 
 class _Estimator(_ParamsValidationMixin, BaseEstimator):
     """An estimator to test the validation of estimator parameters."""
@@ -42,7 +42,21 @@ class _Estimator(_ParamsValidationMixin, BaseEstimator):
 @pytest.mark.parametrize('interval_type', [Integral, Real])
 def test_interval_range(interval_type):
     """Check the range of values depending on closed."""
-    pass
+    interval = Interval(interval_type, 0, 5, closed='both')
+    assert 0 in interval
+    assert 5 in interval
+    
+    interval = Interval(interval_type, 0, 5, closed='left')
+    assert 0 in interval
+    assert 5 not in interval
+    
+    interval = Interval(interval_type, 0, 5, closed='right')
+    assert 0 not in interval
+    assert 5 in interval
+    
+    interval = Interval(interval_type, 0, 5, closed='neither')
+    assert 0 not in interval
+    assert 5 not in interval
 
 @pytest.mark.parametrize('interval_type', [Integral, Real])
 def test_interval_large_integers(interval_type):
@@ -50,41 +64,84 @@ def test_interval_large_integers(interval_type):
 
     non-regression test for #26648.
     """
-    pass
+    large_int = 2**63 - 1
+    interval = Interval(interval_type, -large_int, large_int, closed='both')
+    assert -large_int in interval
+    assert large_int in interval
+    assert large_int + 1 not in interval
 
 def test_interval_inf_in_bounds():
     """Check that inf is included iff a bound is closed and set to None.
 
     Only valid for real intervals.
     """
-    pass
+    interval = Interval(Real, None, None, closed='both')
+    assert np.inf in interval
+    assert -np.inf in interval
+
+    interval = Interval(Real, None, 0, closed='left')
+    assert -np.inf in interval
+    assert np.inf not in interval
+
+    interval = Interval(Real, 0, None, closed='right')
+    assert np.inf in interval
+    assert -np.inf not in interval
+
+    interval = Interval(Real, None, None, closed='neither')
+    assert np.inf not in interval
+    assert -np.inf not in interval
 
 @pytest.mark.parametrize('interval', [Interval(Real, 0, 1, closed='left'), Interval(Real, None, None, closed='both')])
 def test_nan_not_in_interval(interval):
     """Check that np.nan is not in any interval."""
-    pass
+    assert np.nan not in interval
 
 @pytest.mark.parametrize('params, error, match', [({'type': Integral, 'left': 1.0, 'right': 2, 'closed': 'both'}, TypeError, 'Expecting left to be an int for an interval over the integers'), ({'type': Integral, 'left': 1, 'right': 2.0, 'closed': 'neither'}, TypeError, 'Expecting right to be an int for an interval over the integers'), ({'type': Integral, 'left': None, 'right': 0, 'closed': 'left'}, ValueError, "left can't be None when closed == left"), ({'type': Integral, 'left': 0, 'right': None, 'closed': 'right'}, ValueError, "right can't be None when closed == right"), ({'type': Integral, 'left': 1, 'right': -1, 'closed': 'both'}, ValueError, "right can't be less than left")])
 def test_interval_errors(params, error, match):
     """Check that informative errors are raised for invalid combination of parameters"""
-    pass
+    with pytest.raises(error, match=match):
+        Interval(**params)
 
 def test_stroptions():
     """Sanity check for the StrOptions constraint"""
-    pass
+    options = StrOptions({'a', 'b', 'c'})
+    assert 'a' in options.options
+    assert 'd' not in options.options
+    assert str(options) == "a str among {'a', 'b', 'c'}"
+
+    options_with_deprecated = StrOptions({'a', 'b', 'c'}, deprecated={'b'})
+    assert str(options_with_deprecated) == "a str among {'a', 'b (deprecated)', 'c'}"
 
 def test_options():
     """Sanity check for the Options constraint"""
-    pass
+    options = Options(int, {1, 2, 3})
+    assert 1 in options.options
+    assert 4 not in options.options
+    assert str(options) == "an int among {1, 2, 3}"
+
+    options_with_deprecated = Options(int, {1, 2, 3}, deprecated={2})
+    assert str(options_with_deprecated) == "an int among {1, 2 (deprecated), 3}"
 
 @pytest.mark.parametrize('type, expected_type_name', [(int, 'int'), (Integral, 'int'), (Real, 'float'), (np.ndarray, 'numpy.ndarray')])
 def test_instances_of_type_human_readable(type, expected_type_name):
     """Check the string representation of the _InstancesOf constraint."""
-    pass
+    constraint = _InstancesOf(type)
+    assert str(constraint) == f"an instance of '{expected_type_name}'"
 
 def test_hasmethods():
     """Check the HasMethods constraint."""
-    pass
+    constraint = HasMethods(['fit', 'predict'])
+    
+    class ValidEstimator:
+        def fit(self): pass
+        def predict(self): pass
+    
+    class InvalidEstimator:
+        def fit(self): pass
+    
+    assert constraint.is_satisfied_by(ValidEstimator())
+    assert not constraint.is_satisfied_by(InvalidEstimator())
+    assert str(constraint) == "an object implementing 'fit' and 'predict'"
 
 @pytest.mark.parametrize('constraint', [Interval(Real, None, 0, closed='left'), Interval(Real, 0, None, closed='left'), Interval(Real, None, None, closed='neither'), StrOptions({'a', 'b', 'c'}), MissingValues(), MissingValues(numeric_only=True), _VerboseHelper(), HasMethods('fit'), _IterablesNotString(), _CVObjects()])
 def test_generate_invalid_param_val(constraint):
