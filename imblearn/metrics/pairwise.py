@@ -135,7 +135,32 @@ class ValueDifferenceMetric(_ParamsValidationMixin, BaseEstimator):
         self : object
             Return the instance itself.
         """
-        pass
+        self._validate_params()
+        X, y = self._validate_data(X, y, dtype=np.int32)
+        
+        n_samples, n_features = X.shape
+        self.n_features_in_ = n_features
+        
+        if self.n_categories == "auto":
+            self.n_categories_ = np.max(X, axis=0) + 1
+        else:
+            self.n_categories_ = np.asarray(self.n_categories)
+            if self.n_categories_.shape != (n_features,):
+                raise ValueError("n_categories must have shape (n_features,)")
+        
+        self.classes_ = np.unique(y)
+        n_classes = len(self.classes_)
+        
+        self.proba_per_class_ = []
+        for feature in range(n_features):
+            proba = np.zeros((self.n_categories_[feature], n_classes))
+            for category in range(self.n_categories_[feature]):
+                mask = X[:, feature] == category
+                if np.any(mask):
+                    proba[category] = np.bincount(y[mask], minlength=n_classes) / np.sum(mask)
+            self.proba_per_class_.append(proba)
+        
+        return self
 
     def pairwise(self, X, Y=None):
         """Compute the VDM distance pairwise.
@@ -155,4 +180,29 @@ class ValueDifferenceMetric(_ParamsValidationMixin, BaseEstimator):
         distance_matrix : ndarray of shape (n_samples, n_samples)
             The VDM pairwise distance.
         """
-        pass
+        check_is_fitted(self)
+        X = self._validate_data(X, reset=False, dtype=np.int32)
+        
+        if Y is None:
+            Y = X
+        else:
+            Y = self._validate_data(Y, reset=False, dtype=np.int32)
+        
+        n_samples_X, n_features = X.shape
+        n_samples_Y = Y.shape[0]
+        
+        if n_features != self.n_features_in_:
+            raise ValueError("The number of features in X is different from the number of features used in fit.")
+        
+        distance_matrix = np.zeros((n_samples_X, n_samples_Y))
+        
+        for i in range(n_samples_X):
+            for j in range(n_samples_Y):
+                feature_distances = np.zeros(n_features)
+                for f in range(n_features):
+                    x_val, y_val = X[i, f], Y[j, f]
+                    proba_diff = np.abs(self.proba_per_class_[f][x_val] - self.proba_per_class_[f][y_val])
+                    feature_distances[f] = np.sum(proba_diff ** self.k)
+                distance_matrix[i, j] = np.sum(feature_distances ** self.r) ** (1 / self.r)
+        
+        return distance_matrix
