@@ -29,4 +29,9 @@ class CountDecisionTreeClassifier(DecisionTreeClassifier):
 
 def test_balanced_bagging_classifier_n_features():
     """Check that we raise a FutureWarning when accessing `n_features_`."""
-    pass
+    X, y = make_classification(n_samples=100, n_features=4, n_informative=2, n_redundant=0, n_repeated=0, n_classes=2, random_state=0)
+    bbc = BalancedBaggingClassifier(estimator=DecisionTreeClassifier(), n_estimators=10, random_state=42)
+    bbc.fit(X, y)
+    
+    with pytest.warns(FutureWarning, match="The `n_features_` attribute is deprecated"):
+        _ = bbc.n_features_
