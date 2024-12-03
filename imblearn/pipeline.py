@@ -136,7 +136,13 @@ class Pipeline(_ParamsValidationMixin, pipeline.Pipeline):
         transformers are filtered out. When `filter_resample` is `True`,
         estimator with a method `fit_resample` are filtered out.
         """
-        pass
+        it = enumerate(self.steps)
+        if not with_final:
+            it = islice(it, 0, len(self.steps) - 1)
+        for idx, (name, trans) in it:
+            if not filter_passthrough or trans not in ('passthrough', None):
+                if not filter_resample or not hasattr(trans, 'fit_resample'):
+                    yield idx, (name, trans)
 
     @_fit_context(prefer_skip_nested_validation=False)
     def fit(self, X, y=None, **params):
@@ -183,7 +189,14 @@ class Pipeline(_ParamsValidationMixin, pipeline.Pipeline):
         self : Pipeline
             This estimator.
         """
-        pass
+        fit_params_steps = self._check_fit_params(**params)
+        Xt = self._fit(X, y, **fit_params_steps)
+        with _print_elapsed_time('Pipeline', self._log_message(len(self.steps) - 1)):
+            if self._final_estimator != 'passthrough':
+                fit_params_last_step = fit_params_steps[self.steps[-1][0]]
+                self._final_estimator.fit(Xt, y, **fit_params_last_step)
+
+        return self
 
     @available_if(_can_fit_transform)
     @_fit_context(prefer_skip_nested_validation=False)
@@ -230,7 +243,18 @@ class Pipeline(_ParamsValidationMixin, pipeline.Pipeline):
         Xt : array-like of shape (n_samples, n_transformed_features)
             Transformed samples.
         """
-        pass
+        fit_params_steps = self._check_fit_params(**params)
+        Xt = self._fit(X, y, **fit_params_steps)
+
+        last_step = self._final_estimator
+        with _print_elapsed_time('Pipeline', self._log_message(len(self.steps) - 1)):
+            if last_step == 'passthrough':
+                return Xt
+            fit_params_last_step = fit_params_steps[self.steps[-1][0]]
+            if hasattr(last_step, 'fit_transform'):
+                return last_step.fit_transform(Xt, y, **fit_params_last_step)
+            else:
+                return last_step.fit(Xt, y, **fit_params_last_step).transform(Xt)
 
     @available_if(pipeline._final_estimator_has('predict'))
     def predict(self, X, **params):
