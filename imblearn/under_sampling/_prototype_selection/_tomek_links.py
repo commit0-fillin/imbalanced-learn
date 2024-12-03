@@ -109,4 +109,12 @@ class TomekLinks(BaseCleaningSampler):
             Boolean vector on len( # samples ), with True for majority samples
             that are Tomek links.
         """
-        pass
+        is_tomek = np.zeros(len(y), dtype=bool)
+        
+        for index in range(len(y)):
+            if y[index] != class_type:
+                nn = nn_index[index]
+                if y[nn] == class_type and nn_index[nn] == index:
+                    is_tomek[index] = True
+        
+        return is_tomek
