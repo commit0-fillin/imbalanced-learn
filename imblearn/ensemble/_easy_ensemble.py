@@ -177,12 +177,38 @@ class EasyEnsembleClassifier(_ParamsValidationMixin, BaggingClassifier):
     def _validate_estimator(self, default=AdaBoostClassifier(algorithm='SAMME')):
         """Check the estimator and the n_estimator attribute, set the
         `estimator_` attribute."""
-        pass
+        if self.estimator is not None:
+            self.estimator_ = clone(self.estimator)
+        else:
+            self.estimator_ = clone(default)
+
+        if isinstance(self.estimator_, type):
+            raise ValueError("estimator parameter must be an instance, not a class.")
+
+        if not hasattr(self.estimator_, "fit"):
+            raise ValueError("estimator must be a scikit-learn estimator with a 'fit' method.")
+
+        # Set n_estimators
+        if hasattr(self.estimator_, "n_estimators"):
+            self.estimator_.n_estimators = self.n_estimators
+        elif self.n_estimators != 10:
+            warnings.warn("The base estimator doesn't have an n_estimators attribute. "
+                          "Using EasyEnsembleClassifier's n_estimators instead.")
+
+        if not hasattr(self.estimator_, "estimators_"):
+            raise ValueError("The base estimator should be a boosting algorithm with "
+                             "an 'estimators_' attribute.")
 
     @property
     def n_features_(self):
         """Number of features when ``fit`` is performed."""
-        pass
+        # Check if estimators_ is available
+        if not hasattr(self, 'estimators_'):
+            raise NotFittedError("This EasyEnsembleClassifier instance is not fitted yet. "
+                                 "Call 'fit' with appropriate arguments before using this property.")
+        
+        # Get the number of features from the first estimator
+        return self.estimators_[0].n_features_in_
 
     @_fit_context(prefer_skip_nested_validation=False)
     def fit(self, X, y):
@@ -203,7 +229,43 @@ class EasyEnsembleClassifier(_ParamsValidationMixin, BaggingClassifier):
         self : object
             Fitted estimator.
         """
-        pass
+        # Check that X and y have correct shape
+        X, y = self._validate_data(X, y, accept_sparse=['csr', 'csc'])
+        
+        # Check target type
+        y = check_target_type(y)
+        
+        # Store the classes seen during fit
+        self.classes_ = np.unique(y)
+        
+        # Check parameters
+        self._validate_estimator()
+        
+        # Check sampling_strategy
+        self.sampling_strategy_ = check_sampling_strategy(
+            self.sampling_strategy, y, 'under-sampling'
+        )
+        
+        # Initialize and fit base estimators
+        self.estimators_ = []
+        self.estimators_features_ = []
+        
+        for i in range(self.n_estimators):
+            estimator = clone(self.estimator_)
+            
+            # Randomly undersample the majority class
+            X_resampled, y_resampled = RandomUnderSampler(
+                sampling_strategy=self.sampling_strategy_,
+                random_state=self.random_state
+            ).fit_resample(X, y)
+            
+            # Fit the estimator on the resampled data
+            estimator.fit(X_resampled, y_resampled)
+            
+            self.estimators_.append(estimator)
+            self.estimators_features_.append(np.arange(X.shape[1]))
+        
+        return self
 
     @available_if(_estimator_has('decision_function'))
     def decision_function(self, X):
@@ -223,9 +285,32 @@ class EasyEnsembleClassifier(_ParamsValidationMixin, BaggingClassifier):
             ``classes_``. Regression and binary classification are special
             cases with ``k == 1``, otherwise ``k==n_classes``.
         """
-        pass
+        check_is_fitted(self)
+
+        # Check input
+        X = self._validate_data(X, accept_sparse=['csr', 'csc'], reset=False)
+
+        # Parallel loop
+        n_jobs, _, starts = _partition_estimators(self.n_estimators, self.n_jobs)
+
+        all_decisions = Parallel(n_jobs=n_jobs, verbose=self.verbose)(
+            delayed(_parallel_decision_function)(
+                self.estimators_[starts[i]:starts[i + 1]],
+                self.estimators_features_[starts[i]:starts[i + 1]],
+                X
+            )
+            for i in range(n_jobs)
+        )
+
+        # Reduce
+        decisions = sum(all_decisions) / self.n_estimators
+
+        return decisions
 
     @property
     def base_estimator_(self):
         """Attribute for older sklearn version compatibility."""
-        pass
+        warnings.warn("Attribute `base_estimator_` was deprecated in scikit-learn 0.24 "
+                      "and will be removed in 1.1 (renaming of 0.26). Use `estimator` instead.",
+                      FutureWarning)
+        return self.estimator_
