@@ -58,4 +58,23 @@ def parametrize_with_checks(estimators):
     ... def test_sklearn_compatible_estimator(estimator, check):
     ...     check(estimator)
     """
-    pass
+    import pytest
+    from sklearn.utils.estimator_checks import check_estimator
+
+    checks = check_estimator(estimators[0], generate_only=True)
+    
+    def id_func(func):
+        if hasattr(func, "__name__"):
+            return func.__name__
+        else:
+            return str(func)
+
+    return pytest.mark.parametrize(
+        "estimator,check",
+        [(estimator, check) for estimator in estimators for check in checks],
+        ids=[
+            f"{estimator.__class__.__name__}-{id_func(check)}"
+            for estimator in estimators
+            for check in checks
+        ],
+    )
