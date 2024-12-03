@@ -644,7 +644,97 @@ def classification_report_imbalanced(y_true, y_pred, *, labels=None, target_name
     avg / total       0.70      0.60      0.90      0.61      0.66      0.54         5
     <BLANKLINE>
     """
-    pass
+    y_type, y_true, y_pred = _check_targets(y_true, y_pred)
+
+    if labels is None:
+        labels = unique_labels(y_true, y_pred)
+    else:
+        labels = np.asarray(labels)
+
+    # labelled micro average
+    micro_is_accuracy = (y_type == 'multiclass' or y_type == 'binary')
+
+    if target_names is not None and len(labels) != len(target_names):
+        raise ValueError("Number of target names does not match number of labels")
+
+    if target_names is None:
+        target_names = [str(l) for l in labels]
+
+    # Compute the different metrics
+    precision, recall, f1, support = precision_recall_fscore_support(
+        y_true, y_pred, labels=labels, average=None, sample_weight=sample_weight,
+        zero_division=zero_division)
+    specificity = specificity_score(
+        y_true, y_pred, labels=labels, average=None, sample_weight=sample_weight)
+    geometric_mean = geometric_mean_score(
+        y_true, y_pred, labels=labels, average=None, sample_weight=sample_weight)
+    iba_gmean = make_index_balanced_accuracy(alpha=alpha, squared=True)(geometric_mean_score)
+    iba = iba_gmean(y_true, y_pred, labels=labels, average=None, sample_weight=sample_weight)
+
+    # Compute the geometric mean
+    gmean = np.sqrt(recall * specificity)
+
+    # Compute the IBA
+    iba_gmean = (1 + alpha * (recall - specificity)) * gmean
+
+    # Build the rows of the report
+    rows = []
+    for i, label in enumerate(labels):
+        row = {}
+        row['pre'] = precision[i]
+        row['rec'] = recall[i]
+        row['spe'] = specificity[i]
+        row['f1'] = f1[i]
+        row['geo'] = geometric_mean[i]
+        row['iba'] = iba[i]
+        row['sup'] = support[i]
+        rows.append(row)
+
+    if output_dict:
+        report_dict = {
+            target_name: row for target_name, row in zip(target_names, rows)
+        }
+        return report_dict
+
+    # Build the final report
+    report = []
+    report.append("{:25s} {:>9s} {:>9s} {:>9s} {:>9s} {:>9s} {:>9s} {:>9s}".format(
+        "", "pre", "rec", "spe", "f1", "geo", "iba", "sup"))
+    report.append("\n")
+
+    for row, target_name in zip(rows, target_names):
+        report.append("{:25s} {:>9.2f} {:>9.2f} {:>9.2f} {:>9.2f} {:>9.2f} {:>9.2f} {:>9d}".format(
+            target_name,
+            row['pre'],
+            row['rec'],
+            row['spe'],
+            row['f1'],
+            row['geo'],
+            row['iba'],
+            row['sup']))
+        report.append("\n")
+
+    # Compute averages
+    avg_precision = np.average(precision, weights=support)
+    avg_recall = np.average(recall, weights=support)
+    avg_specificity = np.average(specificity, weights=support)
+    avg_f1 = np.average(f1, weights=support)
+    avg_geo = np.average(geometric_mean, weights=support)
+    avg_iba = np.average(iba, weights=support)
+    total_support = np.sum(support)
+
+    report.append("\n")
+    report.append("{:25s} {:>9.2f} {:>9.2f} {:>9.2f} {:>9.2f} {:>9.2f} {:>9.2f} {:>9d}".format(
+        "avg / total",
+        avg_precision,
+        avg_recall,
+        avg_specificity,
+        avg_f1,
+        avg_geo,
+        avg_iba,
+        total_support))
+
+    return ''.join(report)
 
 @validate_params({'y_true': ['array-like'], 'y_pred': ['array-like'], 'sample_weight': ['array-like', None]}, prefer_skip_nested_validation=True)
 def macro_averaged_mean_absolute_error(y_true, y_pred, *, sample_weight=None):
