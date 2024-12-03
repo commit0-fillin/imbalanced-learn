@@ -10,4 +10,32 @@ Y = np.array([1, 2, 1, 1, 0, 2, 2, 2, 2, 2, 2, 0, 1, 2, 2, 2, 2, 1, 2, 1])
 def test_enn_check_kind_selection():
     """Check that `check_sel="all"` is more conservative than
     `check_sel="mode"`."""
-    pass
+    X, y = make_classification(
+        n_samples=200, n_classes=2, weights=[0.1, 0.9], random_state=42
+    )
+
+    enn_all = EditedNearestNeighbours(kind_sel="all", random_state=42)
+    enn_mode = EditedNearestNeighbours(kind_sel="mode", random_state=42)
+
+    X_resampled_all, y_resampled_all = enn_all.fit_resample(X, y)
+    X_resampled_mode, y_resampled_mode = enn_mode.fit_resample(X, y)
+
+    # Check that "all" selection is more conservative (removes fewer samples)
+    assert len(X_resampled_all) >= len(X_resampled_mode)
+    assert len(y_resampled_all) >= len(y_resampled_mode)
+
+    # Check that the samples in "all" are a superset of samples in "mode"
+    assert set(map(tuple, X_resampled_mode)).issubset(set(map(tuple, X_resampled_all)))
+    assert set(y_resampled_mode).issubset(set(y_resampled_all))
+
+    # Check that both methods have reduced the number of samples
+    assert len(X_resampled_all) < len(X)
+    assert len(X_resampled_mode) < len(X)
+
+    # Check that the class distribution has been improved (more balanced)
+    original_ratio = np.sum(y == 0) / np.sum(y == 1)
+    all_ratio = np.sum(y_resampled_all == 0) / np.sum(y_resampled_all == 1)
+    mode_ratio = np.sum(y_resampled_mode == 0) / np.sum(y_resampled_mode == 1)
+
+    assert abs(1 - all_ratio) < abs(1 - original_ratio)
+    assert abs(1 - mode_ratio) < abs(1 - original_ratio)
