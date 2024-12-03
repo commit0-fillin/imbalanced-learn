@@ -59,7 +59,77 @@ if sklearn_version < parse_version('1.4'):
         caller_name : str
             The name of the estimator or function or method that called this function.
         """
-        pass
+        if parameter_constraints == "no_validation":
+            return
+
+        for param_name, param_value in params.items():
+            if param_name not in parameter_constraints:
+                raise ValueError(f"Unknown parameter {param_name} for {caller_name}")
+
+            constraints = parameter_constraints[param_name]
+            if not isinstance(constraints, list):
+                constraints = [constraints]
+
+            for constraint in constraints:
+                if isinstance(constraint, Interval):
+                    if constraint.type == Integral:
+                        if not isinstance(param_value, Integral):
+                            continue
+                    elif constraint.type == Real:
+                        if not isinstance(param_value, Real):
+                            continue
+                    if param_value in constraint:
+                        break
+                elif constraint == "array-like":
+                    if _is_arraylike_not_scalar(param_value):
+                        break
+                elif constraint == "sparse matrix":
+                    if issparse(param_value):
+                        break
+                elif constraint == "random_state":
+                    if isinstance(param_value, (int, np.random.RandomState, type(None))):
+                        break
+                elif callable(constraint):
+                    if callable(param_value):
+                        break
+                elif constraint is None:
+                    if param_value is None:
+                        break
+                elif isinstance(constraint, type):
+                    if isinstance(param_value, constraint):
+                        break
+                elif isinstance(constraint, Options):
+                    if isinstance(param_value, constraint.type) and param_value in constraint.options:
+                        break
+                elif isinstance(constraint, StrOptions):
+                    if isinstance(param_value, str) and param_value in constraint.options:
+                        break
+                elif constraint == "boolean":
+                    if isinstance(param_value, bool):
+                        break
+                elif constraint == "verbose":
+                    if isinstance(param_value, (bool, int)):
+                        break
+                elif constraint == "cv_object":
+                    if isinstance(param_value, (int, HasMethods(["split", "get_n_splits"]), _IterablesNotString, type(None))):
+                        break
+                elif constraint == "nan":
+                    if np.isnan(param_value):
+                        break
+                elif isinstance(constraint, MissingValues):
+                    if param_value in constraint._constraints:
+                        break
+                elif isinstance(constraint, HasMethods):
+                    if all(hasattr(param_value, method) for method in constraint.methods):
+                        break
+                elif isinstance(constraint, Hidden):
+                    # Hidden constraints are not validated
+                    break
+            else:
+                raise InvalidParameterError(
+                    f"The {param_name} parameter of {caller_name} must be "
+                    f"{' or '.join(str(c) for c in constraints)}. Got {param_value!r} instead."
+                )
 
     def make_constraint(constraint):
         """Convert the constraint into the appropriate Constraint object.
@@ -74,7 +144,30 @@ if sklearn_version < parse_version('1.4'):
         constraint : instance of _Constraint
             The converted constraint.
         """
-        pass
+        if isinstance(constraint, _Constraint):
+            return constraint
+        elif constraint == "array-like":
+            return _ArrayLikes()
+        elif constraint == "sparse matrix":
+            return _SparseMatrices()
+        elif constraint == "random_state":
+            return _RandomStates()
+        elif constraint is None:
+            return _NoneConstraint()
+        elif isinstance(constraint, type):
+            return _InstancesOf(constraint)
+        elif constraint == "boolean":
+            return _Booleans()
+        elif constraint == "verbose":
+            return _VerboseHelper()
+        elif constraint == "cv_object":
+            return _CVObjects()
+        elif constraint == "nan":
+            return _NanConstraint()
+        elif callable(constraint):
+            return _Callables()
+        else:
+            raise ValueError(f"Unknown constraint type: {constraint}")
 
     def validate_params(parameter_constraints, *, prefer_skip_nested_validation):
         """Decorator to validate types and values of functions and methods.
@@ -107,7 +200,30 @@ if sklearn_version < parse_version('1.4'):
         decorated_function : function or method
             The decorated function.
         """
-        pass
+        def decorator(func):
+            @functools.wraps(func)
+            def wrapper(*args, **kwargs):
+                # Get the function signature
+                sig = signature(func)
+            
+                # Combine args and kwargs into a single dictionary
+                bound_args = sig.bind(*args, **kwargs)
+                bound_args.apply_defaults()
+                params = bound_args.arguments
+
+                # Remove self or cls from params if present
+                if 'self' in params:
+                    del params['self']
+                elif 'cls' in params:
+                    del params['cls']
+
+                # Validate parameters
+                with config_context(skip_parameter_validation=prefer_skip_nested_validation):
+                    validate_parameter_constraints(parameter_constraints, params, func.__qualname__)
+
+                return func(*args, **kwargs)
+            return wrapper
+        return decorator
 
     class RealNotInt(Real):
         """A type that represents reals that are not instances of int.
@@ -120,7 +236,14 @@ if sklearn_version < parse_version('1.4'):
 
     def _type_name(t):
         """Convert type into human readable string."""
-        pass
+        module = t.__module__
+        qualname = t.__qualname__
+        if module == "builtins":
+            return qualname
+        elif module == "numpy":
+            return f"numpy.{qualname}"
+        else:
+            return f"{module}.{qualname}"
 
     class _Constraint(ABC):
         """Base class for the constraint objects."""
@@ -142,7 +265,7 @@ if sklearn_version < parse_version('1.4'):
             is_satisfied : bool
                 Whether or not the constraint is satisfied by this value.
             """
-            pass
+            return isinstance(val, self.type)
 
         @abstractmethod
         def __str__(self):
@@ -207,7 +330,9 @@ if sklearn_version < parse_version('1.4'):
 
         def _mark_if_deprecated(self, option):
             """Add a deprecated mark to an option if needed."""
-            pass
+            if option in self.deprecated:
+                return f"{option} (deprecated)"
+            return str(option)
 
         def __str__(self):
             options_str = f'{', '.join([self._mark_if_deprecated(o) for o in self.options])}'
@@ -469,7 +594,39 @@ if sklearn_version < parse_version('1.4'):
         val : object
             A value that does not satisfy the constraint.
         """
-        pass
+        if isinstance(constraint, Interval):
+            if constraint.type == Integral:
+                return constraint.right + 1 if constraint.right is not None else constraint.left - 1
+            else:
+                return constraint.right + 1.0 if constraint.right is not None else constraint.left - 1.0
+        elif isinstance(constraint, _InstancesOf):
+            return "invalid_value"  # This will be invalid for most types
+        elif isinstance(constraint, Options):
+            return "invalid_option"
+        elif isinstance(constraint, StrOptions):
+            return "invalid_string_option"
+        elif isinstance(constraint, _ArrayLikes):
+            return 42  # Not array-like
+        elif isinstance(constraint, _SparseMatrices):
+            return [1, 2, 3]  # Not a sparse matrix
+        elif isinstance(constraint, _RandomStates):
+            return "not_a_random_state"
+        elif isinstance(constraint, _Callables):
+            return "not_callable"
+        elif isinstance(constraint, _Booleans):
+            return "not_a_boolean"
+        elif isinstance(constraint, _VerboseHelper):
+            return "not_verbose"
+        elif isinstance(constraint, _CVObjects):
+            return "not_a_cv_object"
+        elif isinstance(constraint, _NanConstraint):
+            return 0  # Not NaN
+        elif isinstance(constraint, MissingValues):
+            return complex(1, 1)  # Not a valid missing value
+        elif isinstance(constraint, HasMethods):
+            return "not_an_object_with_methods"
+        else:
+            raise NotImplementedError(f"Cannot generate invalid value for {constraint}")
 
     def generate_valid_param(constraint):
         """Return a value that does satisfy a constraint.
@@ -486,7 +643,49 @@ if sklearn_version < parse_version('1.4'):
         val : object
             A value that does satisfy the constraint.
         """
-        pass
+        if isinstance(constraint, Interval):
+            if constraint.type == Integral:
+                return constraint.left if constraint.left is not None else (constraint.right - 1)
+            else:
+                return constraint.left if constraint.left is not None else (constraint.right - 0.5)
+        elif isinstance(constraint, _InstancesOf):
+            if constraint.type == int:
+                return 0
+            elif constraint.type == float:
+                return 0.0
+            elif constraint.type == str:
+                return "valid_string"
+            else:
+                return constraint.type()
+        elif isinstance(constraint, Options):
+            return next(iter(constraint.options))
+        elif isinstance(constraint, StrOptions):
+            return next(iter(constraint.options))
+        elif isinstance(constraint, _ArrayLikes):
+            return np.array([1, 2, 3])
+        elif isinstance(constraint, _SparseMatrices):
+            return csr_matrix([[1, 2], [3, 4]])
+        elif isinstance(constraint, _RandomStates):
+            return np.random.RandomState(0)
+        elif isinstance(constraint, _Callables):
+            return lambda x: x
+        elif isinstance(constraint, _Booleans):
+            return True
+        elif isinstance(constraint, _VerboseHelper):
+            return 1
+        elif isinstance(constraint, _CVObjects):
+            return 3
+        elif isinstance(constraint, _NanConstraint):
+            return np.nan
+        elif isinstance(constraint, MissingValues):
+            return np.nan
+        elif isinstance(constraint, HasMethods):
+            class ValidObject:
+                def __getattr__(self, name):
+                    return lambda: None
+            return ValidObject()
+        else:
+            raise NotImplementedError(f"Cannot generate valid value for {constraint}")
 else:
     from sklearn.utils._param_validation import generate_invalid_param_val
     from sklearn.utils._param_validation import generate_valid_param
