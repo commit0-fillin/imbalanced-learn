@@ -121,7 +121,7 @@ class NearMiss(BaseUnderSampler):
             Associated label to X.
 
         dist_vec : ndarray, shape (n_samples, )
-            The distance matrix to the nearest neigbour.
+            The distance matrix to the nearest neighbour.
 
         num_samples: int
             The desired number of samples to select.
@@ -138,8 +138,37 @@ class NearMiss(BaseUnderSampler):
             The list of the indices of the selected samples.
 
         """
-        pass
+        # Find the indices of samples in the majority class
+        idx_class = np.flatnonzero(y == key)
+
+        # Sort the distances based on the strategy
+        if sel_strategy == 'nearest':
+            sort_way = False
+        elif sel_strategy == 'farthest':
+            sort_way = True
+        else:
+            raise ValueError("'sel_strategy' should be either 'nearest' or 'farthest'.")
+
+        idx_sorted = idx_class[dist_vec[idx_class].argsort(kind='mergesort')]
+
+        # Select the desired number of samples
+        return idx_sorted[:num_samples]
 
     def _validate_estimator(self):
         """Private function to create the NN estimator"""
-        pass
+        from sklearn.neighbors import NearestNeighbors
+
+        if isinstance(self.n_neighbors, int):
+            self.nn_ = NearestNeighbors(n_neighbors=self.n_neighbors, n_jobs=self.n_jobs)
+        elif isinstance(self.n_neighbors, NearestNeighbors):
+            self.nn_ = self.n_neighbors
+        else:
+            raise ValueError(f"'n_neighbors' has to be a positive integer or a NearestNeighbors object. Got {type(self.n_neighbors)} instead.")
+
+        if self.version == 3:
+            if isinstance(self.n_neighbors_ver3, int):
+                self.nn_ver3_ = NearestNeighbors(n_neighbors=self.n_neighbors_ver3, n_jobs=self.n_jobs)
+            elif isinstance(self.n_neighbors_ver3, NearestNeighbors):
+                self.nn_ver3_ = self.n_neighbors_ver3
+            else:
+                raise ValueError(f"'n_neighbors_ver3' has to be a positive integer or a NearestNeighbors object. Got {type(self.n_neighbors_ver3)} instead.")
