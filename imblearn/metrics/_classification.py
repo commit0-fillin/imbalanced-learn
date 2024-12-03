@@ -126,7 +126,72 @@ def sensitivity_specificity_support(y_true, y_pred, *, labels=None, pos_label=1,
     >>> sensitivity_specificity_support(y_true, y_pred, average='weighted')
     (0.33..., 0.66..., None)
     """
-    pass
+    y_type, y_true, y_pred = _check_targets(y_true, y_pred)
+    present_labels = unique_labels(y_true, y_pred)
+    
+    if average == 'binary':
+        if y_type == 'binary':
+            if pos_label not in present_labels:
+                if len(present_labels) < 2:
+                    # Only negative label
+                    return (0., 0., 0)
+                else:
+                    raise ValueError("pos_label=%r is not a valid label: %r" % (pos_label, present_labels))
+        else:
+            raise ValueError("Target is %s but average='binary'. Please "
+                             "choose another average setting." % y_type)
+    elif pos_label not in (None, 1):
+        warnings.warn("Note that pos_label (set to %r) is ignored when "
+                      "average != 'binary' (got %r). You may use "
+                      "labels=[pos_label] to specify a single positive class."
+                      % (pos_label, average), UserWarning)
+
+    if labels is None:
+        labels = present_labels
+        n_labels = None
+    else:
+        n_labels = len(labels)
+        labels = np.hstack([labels, np.setdiff1d(present_labels, labels, assume_unique=True)])
+
+    # Calculate tp_sum, pred_sum, true_sum for each label
+    samplewise = average == 'samples'
+    mcm = multilabel_confusion_matrix(y_true, y_pred,
+                                      sample_weight=sample_weight,
+                                      labels=labels, samplewise=samplewise)
+    tp_sum = mcm[:, 1, 1]
+    pred_sum = tp_sum + mcm[:, 0, 1]
+    true_sum = tp_sum + mcm[:, 1, 0]
+
+    if average == 'micro':
+        tp_sum = np.array([tp_sum.sum()])
+        pred_sum = np.array([pred_sum.sum()])
+        true_sum = np.array([true_sum.sum()])
+
+    # Finally, we have all our sufficient statistics. Divide! #
+    with np.errstate(divide='ignore', invalid='ignore'):
+        # Divide, and on zero-division, set scores and/or warn according to
+        # the specification in warn_for
+        sensitivity = _prf_divide(tp_sum, true_sum, 'sensitivity', 'true', warn_for)
+        specificity = _prf_divide(mcm[:, 0, 0], mcm[:, 0, 0] + mcm[:, 0, 1],
+                                  'specificity', 'true', warn_for)
+
+    # Average the results
+    if average == 'weighted':
+        weights = true_sum
+        if weights.sum() == 0:
+            return 0, 0, None
+    elif average == 'samples':
+        weights = sample_weight
+    else:
+        weights = None
+
+    if average is not None:
+        assert average != 'binary' or len(sensitivity) == 1
+        sensitivity = np.average(sensitivity, weights=weights)
+        specificity = np.average(specificity, weights=weights)
+        true_sum = None  # return no support
+
+    return sensitivity, specificity, true_sum
 
 @validate_params({'y_true': ['array-like'], 'y_pred': ['array-like'], 'labels': ['array-like', None], 'pos_label': [str, numbers.Integral, None], 'average': [None, StrOptions({'binary', 'micro', 'macro', 'weighted', 'samples'})], 'sample_weight': ['array-like', None]}, prefer_skip_nested_validation=True)
 def sensitivity_score(y_true, y_pred, *, labels=None, pos_label=1, average='binary', sample_weight=None):
@@ -191,8 +256,9 @@ def sensitivity_score(y_true, y_pred, *, labels=None, pos_label=1, average='bina
 
     Returns
     -------
-    specificity : float (if `average is None`) or ndarray of             shape (n_unique_labels,)
-        The specifcity metric.
+    sensitivity : float (if `average` is not None) or ndarray of \
+            shape (n_unique_labels,)
+        The sensitivity score or scores.
 
     Examples
     --------
@@ -209,7 +275,13 @@ def sensitivity_score(y_true, y_pred, *, labels=None, pos_label=1, average='bina
     >>> sensitivity_score(y_true, y_pred, average=None)
     array([1., 0., 0.])
     """
-    pass
+    s, _, _ = sensitivity_specificity_support(y_true, y_pred,
+                                              labels=labels,
+                                              pos_label=pos_label,
+                                              average=average,
+                                              warn_for=("sensitivity",),
+                                              sample_weight=sample_weight)
+    return s
 
 @validate_params({'y_true': ['array-like'], 'y_pred': ['array-like'], 'labels': ['array-like', None], 'pos_label': [str, numbers.Integral, None], 'average': [None, StrOptions({'binary', 'micro', 'macro', 'weighted', 'samples'})], 'sample_weight': ['array-like', None]}, prefer_skip_nested_validation=True)
 def specificity_score(y_true, y_pred, *, labels=None, pos_label=1, average='binary', sample_weight=None):
