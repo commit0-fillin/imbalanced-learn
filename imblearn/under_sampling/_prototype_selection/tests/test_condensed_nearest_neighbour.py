@@ -11,8 +11,35 @@ Y = np.array([1, 2, 1, 1, 0, 2, 2, 2, 2, 2, 2, 0, 1, 2, 2, 2, 2, 1, 2, 1])
 
 def test_condensed_nearest_neighbour_multiclass():
     """Check the validity of the fitted attributes `estimators_`."""
-    pass
+    cnn = CondensedNearestNeighbour(random_state=RND_SEED)
+    cnn.fit_resample(X, Y)
+    
+    assert hasattr(cnn, 'sample_indices_')
+    assert len(cnn.sample_indices_) < len(X)
+    
+    X_resampled, y_resampled = cnn.fit_resample(X, Y)
+    
+    # Check that the number of samples is reduced
+    assert len(X_resampled) < len(X)
+    assert len(y_resampled) < len(Y)
+    
+    # Check that all classes are still present in the resampled data
+    assert set(y_resampled) == set(Y)
+    
+    # Check that the resampled data can be used to train a classifier
+    clf = KNeighborsClassifier()
+    clf.fit(X_resampled, y_resampled)
+    
+    # Predict on the original data
+    y_pred = clf.predict(X)
+    
+    # Check that the prediction is not all the same class
+    assert len(set(y_pred)) > 1
 
 def test_condensed_nearest_neighbors_deprecation():
     """Check that we raise a FutureWarning when accessing the parameter `estimator_`."""
-    pass
+    cnn = CondensedNearestNeighbour(random_state=RND_SEED)
+    cnn.fit(X, Y)
+    
+    with pytest.warns(FutureWarning, match="The attribute `estimator_` is deprecated"):
+        _ = cnn.estimator_
