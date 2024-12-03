@@ -20,4 +20,17 @@ def deprecate_parameter(sampler, version_deprecation, param_deprecated, new_para
         The parameter used instead of the deprecated parameter. By default, no
         parameter is expected.
     """
-    pass
+    if hasattr(sampler, param_deprecated):
+        if new_param is None:
+            message = (
+                f"The parameter '{param_deprecated}' is deprecated in "
+                f"version {version_deprecation} and will be removed in a "
+                f"future version."
+            )
+        else:
+            message = (
+                f"The parameter '{param_deprecated}' is deprecated in "
+                f"version {version_deprecation} and will be removed in a "
+                f"future version. Use '{new_param}' instead."
+            )
+        warnings.warn(message, category=FutureWarning)
