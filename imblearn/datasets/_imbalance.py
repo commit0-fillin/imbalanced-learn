@@ -77,4 +77,27 @@ def make_imbalance(X, y, *, sampling_strategy=None, random_state=None, verbose=F
     >>> print(f'Distribution after imbalancing: {Counter(y_res)}')
     Distribution after imbalancing: Counter({2: 30, 1: 20, 0: 10})
     """
-    pass
+    X, y = check_X_y(X, y, accept_sparse=['csr', 'csc'], dtype=None)
+
+    if sampling_strategy is None:
+        return X, y
+
+    if callable(sampling_strategy):
+        sampling_strategy_ = sampling_strategy(y, **kwargs)
+    else:
+        sampling_strategy_ = sampling_strategy
+
+    sampling_strategy_ = check_sampling_strategy(sampling_strategy_, y, 'under-sampling')
+
+    rus = RandomUnderSampler(
+        sampling_strategy=sampling_strategy_,
+        random_state=random_state,
+        replacement=False
+    )
+
+    X_resampled, y_resampled = rus.fit_resample(X, y)
+
+    if verbose:
+        print(f"Resampling done. New class distribution: {Counter(y_resampled)}")
+
+    return X_resampled, y_resampled
