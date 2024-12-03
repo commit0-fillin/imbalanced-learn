@@ -374,14 +374,35 @@ class BalancedRandomForestClassifier(_ParamsValidationMixin, RandomForestClassif
     def _validate_estimator(self, default=DecisionTreeClassifier()):
         """Check the estimator and the n_estimator attribute, set the
         `estimator_` attribute."""
-        pass
+        if not isinstance(self.n_estimators, numbers.Integral):
+            raise ValueError("n_estimators must be an integer, "
+                             f"got {type(self.n_estimators)}.")
+
+        if self.n_estimators <= 0:
+            raise ValueError("n_estimators must be greater than zero, "
+                             f"got {self.n_estimators}.")
+
+        if self.estimator is not None:
+            self.estimator_ = clone(self.estimator)
+        else:
+            self.estimator_ = clone(default)
+
+        if isinstance(self.estimator_, DecisionTreeClassifier):
+            self.estimator_.max_depth = 1
 
     def _make_sampler_estimator(self, random_state=None):
         """Make and configure a copy of the `base_estimator_` attribute.
         Warning: This method should be used to properly instantiate new
         sub-estimators.
         """
-        pass
+        estimator = clone(self.estimator_)
+        estimator.set_params(**{p: getattr(self, p)
+                                for p in self.estimator_params})
+
+        if random_state is not None:
+            _set_random_states(estimator, random_state)
+
+        return estimator
 
     @_fit_context(prefer_skip_nested_validation=True)
     def fit(self, X, y, sample_weight=None):
@@ -410,7 +431,127 @@ class BalancedRandomForestClassifier(_ParamsValidationMixin, RandomForestClassif
         self : object
             The fitted instance.
         """
-        pass
+        # Check parameters
+        self._validate_estimator()
+
+        if sample_weight is not None:
+            sample_weight = _check_sample_weight(sample_weight, X)
+
+        # Validate or convert input data
+        X, y = self._validate_data(
+            X, y, multi_output=True, accept_sparse="csc", dtype=DTYPE
+        )
+        if sample_weight is not None:
+            sample_weight = _check_sample_weight(sample_weight, X)
+
+        if issparse(X):
+            # Pre-sort indices to avoid that each individual tree of the
+            # ensemble sorts the indices.
+            X.sort_indices()
+
+        # Remap output
+        n_samples, self.n_features_in_ = X.shape
+        self._n_samples = n_samples
+        y = np.atleast_1d(y)
+        if y.ndim == 2 and y.shape[1] == 1:
+            warn("A column-vector y was passed when a 1d array was"
+                 " expected. Please change the shape of y to "
+                 "(n_samples,), for example using ravel().",
+                 DataConversionWarning, stacklevel=2)
+
+        if y.ndim == 1:
+            # reshape is necessary to preserve the data contiguity against vs
+            # [:, np.newaxis] that does not.
+            y = np.reshape(y, (-1, 1))
+
+        self.n_outputs_ = y.shape[1]
+
+        y, expanded_class_weight = self._validate_y_class_weight(y)
+
+        if getattr(y, "dtype", None) != DOUBLE or not y.flags.contiguous:
+            y = np.ascontiguousarray(y, dtype=DOUBLE)
+
+        if expanded_class_weight is not None:
+            if sample_weight is not None:
+                sample_weight = sample_weight * expanded_class_weight
+            else:
+                sample_weight = expanded_class_weight
+
+        # Get bootstrap sample size
+        n_samples_bootstrap = _get_n_samples_bootstrap(
+            n_samples=X.shape[0],
+            max_samples=self.max_samples
+        )
+
+        # Check parameters
+        self._validate_estimator()
+
+        if not self.bootstrap and self.oob_score:
+            raise ValueError("Out of bag estimation only available"
+                             " if bootstrap=True")
+
+        random_state = check_random_state(self.random_state)
+
+        if not self.warm_start or not hasattr(self, "estimators_"):
+            # Free allocated memory, if any
+            self.estimators_ = []
+            self.estimators_features_ = []
+
+        n_more_estimators = self.n_estimators - len(self.estimators_)
+
+        if n_more_estimators < 0:
+            raise ValueError('n_estimators=%d must be larger or equal to '
+                             'len(estimators_)=%d when warm_start==True'
+                             % (self.n_estimators, len(self.estimators_)))
+
+        elif n_more_estimators == 0:
+            warn("Warm-start fitting without increasing n_estimators does not "
+                 "fit new trees.")
+            return self
+
+        # Parallel loop
+        n_jobs, n_estimators, starts = _partition_estimators(
+            n_more_estimators, self.n_jobs
+        )
+        total_n_estimators = sum(n_estimators)
+
+        # Advance random state to state after training
+        # the first n_estimators
+        if self.warm_start and len(self.estimators_) > 0:
+            random_state.randint(MAX_INT, size=len(self.estimators_))
+
+        trees = [
+            self._make_estimator(append=False, random_state=random_state)
+            for i in range(n_more_estimators)
+        ]
+
+        # Parallel loop
+        all_results = Parallel(n_jobs=n_jobs, verbose=self.verbose,
+                               **self._parallel_args())(
+            delayed(_parallel_build_trees)(
+                t,
+                self,
+                X,
+                y,
+                sample_weight,
+                i,
+                len(trees),
+                verbose=self.verbose,
+                class_weight=self.class_weight,
+                n_samples_bootstrap=n_samples_bootstrap
+            )
+            for i, t in enumerate(trees))
+
+        # Collect newly grown trees
+        self.estimators_.extend(tree for tree, _, _ in all_results)
+        self.estimators_features_.extend(
+            features for _, features, _ in all_results
+        )
+
+        if self.oob_score:
+            self._set_oob_score_and_attributes(X, y)
+
+        return self
 
     def _set_oob_score_and_attributes(self, X, y):
         """Compute and set the OOB score and attributes.
@@ -422,7 +563,13 @@ class BalancedRandomForestClassifier(_ParamsValidationMixin, RandomForestClassif
         y : ndarray of shape (n_samples, n_outputs)
             The target matrix.
         """
-        pass
+        self.oob_decision_function_ = self._compute_oob_predictions(X, y)
+        if self.oob_decision_function_.shape[-1] == 1:
+            # If predictions are for a single class, reshape to match estimator format
+            self.oob_decision_function_ = self.oob_decision_function_.reshape((-1, 1))
+        self.oob_score_ = accuracy_score(
+            y, np.argmax(self.oob_decision_function_, axis=1)
+        )
 
     def _compute_oob_predictions(self, X, y):
         """Compute and set the OOB score.
@@ -439,9 +586,44 @@ class BalancedRandomForestClassifier(_ParamsValidationMixin, RandomForestClassif
         oob_pred : ndarray of shape (n_samples, n_classes, n_outputs) or                 (n_samples, 1, n_outputs)
             The OOB predictions.
         """
-        pass
+        n_samples = y.shape[0]
+        n_classes = self.n_classes_
+        n_outputs = self.n_outputs_
+
+        oob_pred = np.zeros((n_samples, n_classes, n_outputs))
+        n_oob_pred = np.zeros((n_samples, n_outputs))
+
+        for estimator, samples, features in zip(
+            self.estimators_, self.estimators_samples_, self.estimators_features_
+        ):
+            # Create mask for OOB samples
+            mask = ~samples
+
+            if hasattr(estimator, "predict_proba"):
+                predictions = estimator.predict_proba(X[mask, :][:, features])
+            else:
+                predictions = estimator.predict(X[mask, :][:, features])
+
+            if n_outputs == 1:
+                predictions = predictions[..., np.newaxis]
+
+            oob_pred[mask, :, :] += predictions
+            n_oob_pred[mask, :] += 1
+
+        for k in range(n_outputs):
+            if (n_oob_pred == 0).any():
+                warn("Some inputs do not have OOB scores. This probably means "
+                     "too few trees were used to compute any reliable OOB "
+                     "estimates.")
+                n_oob_pred[n_oob_pred == 0] = 1
+            oob_pred[..., k] /= n_oob_pred[..., k, np.newaxis]
+
+        if n_outputs == 1:
+            oob_pred = oob_pred.reshape((n_samples, n_classes))
+
+        return oob_pred
 
     @property
     def n_features_(self):
         """Number of features when ``fit`` is performed."""
-        pass
+        return self.n_features_in_
