@@ -175,4 +175,40 @@ def fetch_datasets(*, data_home=None, filter_data=None, download_if_missing=True
        Imbalanced Data Learning and their Application in Bioinformatics."
        Dissertation, Georgia State University, (2011).
     """
-    pass
+    data_home = get_data_home(data_home=data_home)
+    zenodo_dir = join(data_home, 'zenodo')
+    datasets_path = join(zenodo_dir, 'datasets.npz')
+
+    if not isfile(datasets_path):
+        if not download_if_missing:
+            raise IOError('Data not found and `download_if_missing` is False')
+        
+        if verbose:
+            print('Downloading dataset from Zenodo...')
+        
+        makedirs(zenodo_dir, exist_ok=True)
+        
+        with urlopen(URL) as response:
+            with tarfile.open(fileobj=BytesIO(response.read()), mode='r:gz') as tar:
+                tar.extractall(path=zenodo_dir)
+
+    datasets_dict = np.load(datasets_path, allow_pickle=True)
+    
+    if filter_data is not None:
+        datasets_dict = OrderedDict((k, datasets_dict[k]) for k in filter_data)
+
+    for dataset_name, dataset in datasets_dict.items():
+        X, y = dataset['data'], dataset['target']
+        if shuffle:
+            if random_state is None:
+                X, y = sklearn.utils.shuffle(X, y)
+            else:
+                X, y = sklearn.utils.shuffle(X, y, random_state=random_state)
+        
+        datasets_dict[dataset_name] = Bunch(
+            data=X,
+            target=y,
+            DESCR=dataset.get('DESCR', f'Dataset: {dataset_name}')
+        )
+
+    return datasets_dict
