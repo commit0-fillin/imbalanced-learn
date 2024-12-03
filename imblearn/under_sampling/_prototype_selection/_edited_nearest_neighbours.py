@@ -5,6 +5,7 @@ from collections import Counter
 import numpy as np
 from sklearn.utils import _safe_indexing
 from ...utils import Substitution, check_neighbors_object
+from ...utils._validation import _deprecate_positional_args
 from ...utils._docstring import _n_jobs_docstring
 from ...utils._param_validation import HasMethods, Interval, StrOptions
 from ...utils.fixes import _mode
@@ -119,7 +120,8 @@ class EditedNearestNeighbours(BaseCleaningSampler):
 
     def _validate_estimator(self):
         """Validate the estimator created in the ENN."""
-        pass
+        self.nn_ = check_neighbors_object('n_neighbors', self.n_neighbors)
+        self.nn_.set_params(**{'n_neighbors': self.n_neighbors + 1})
 
 @Substitution(sampling_strategy=BaseCleaningSampler._sampling_strategy_docstring, n_jobs=_n_jobs_docstring)
 class RepeatedEditedNearestNeighbours(BaseCleaningSampler):
@@ -243,7 +245,14 @@ class RepeatedEditedNearestNeighbours(BaseCleaningSampler):
 
     def _validate_estimator(self):
         """Private function to create the NN estimator"""
-        pass
+        self.nn_ = check_neighbors_object('n_neighbors', self.n_neighbors)
+        self.nn_.set_params(**{'n_neighbors': self.n_neighbors + 1})
+        self.enn_ = EditedNearestNeighbours(
+            sampling_strategy=self.sampling_strategy,
+            n_neighbors=self.n_neighbors,
+            kind_sel=self.kind_sel,
+            n_jobs=self.n_jobs,
+        )
 
 @Substitution(sampling_strategy=BaseCleaningSampler._sampling_strategy_docstring, n_jobs=_n_jobs_docstring)
 class AllKNN(BaseCleaningSampler):
@@ -366,4 +375,11 @@ class AllKNN(BaseCleaningSampler):
 
     def _validate_estimator(self):
         """Create objects required by AllKNN"""
-        pass
+        self.nn_ = check_neighbors_object('n_neighbors', self.n_neighbors)
+        self.nn_.set_params(**{'n_neighbors': self.n_neighbors})
+        self.enn_ = EditedNearestNeighbours(
+            sampling_strategy='all',
+            n_neighbors=self.n_neighbors,
+            kind_sel=self.kind_sel,
+            n_jobs=self.n_jobs,
+        )
