@@ -26,7 +26,12 @@ class _ParamsValidationMixin:
         the docstring of `validate_parameter_constraints` for a description of the
         accepted constraints.
         """
-        pass
+        if hasattr(self, '_parameter_constraints'):
+            validate_parameter_constraints(
+                self._parameter_constraints,
+                self.get_params(deep=False),
+                caller_name=self.__class__.__name__,
+            )
 
 class SamplerMixin(_ParamsValidationMixin, BaseEstimator, metaclass=ABCMeta):
     """Mixin class for samplers with abstract method.
@@ -54,7 +59,13 @@ class SamplerMixin(_ParamsValidationMixin, BaseEstimator, metaclass=ABCMeta):
         self : object
             Return the instance itself.
         """
-        pass
+        X, y = self._validate_data(X, y, reset=True)
+        self._validate_params()
+        y = check_target_type(y)
+        self.sampling_strategy_ = check_sampling_strategy(
+            self.sampling_strategy, y, self._sampling_type
+        )
+        return self
 
     def fit_resample(self, X, y):
         """Resample the dataset.
@@ -75,7 +86,9 @@ class SamplerMixin(_ParamsValidationMixin, BaseEstimator, metaclass=ABCMeta):
         y_resampled : array-like of shape (n_samples_new,)
             The corresponding label of `X_resampled`.
         """
-        pass
+        self.fit(X, y)
+        X_resampled, y_resampled = self._fit_resample(X, y)
+        return X_resampled, y_resampled
 
     @abstractmethod
     def _fit_resample(self, X, y):
@@ -99,7 +112,7 @@ class SamplerMixin(_ParamsValidationMixin, BaseEstimator, metaclass=ABCMeta):
             The corresponding label of `X_resampled`.
 
         """
-        pass
+        raise NotImplementedError("Method '_fit_resample' must be implemented in derived classes.")
 
 class BaseSampler(SamplerMixin, OneToOneFeatureMixin):
     """Base class for sampling algorithms.
@@ -129,7 +142,7 @@ class BaseSampler(SamplerMixin, OneToOneFeatureMixin):
         self : object
             Return the instance itself.
         """
-        pass
+        return super().fit(X, y)
 
     def fit_resample(self, X, y):
         """Resample the dataset.
@@ -150,7 +163,7 @@ class BaseSampler(SamplerMixin, OneToOneFeatureMixin):
         y_resampled : array-like of shape (n_samples_new,)
             The corresponding label of `X_resampled`.
         """
-        pass
+        return super().fit_resample(X, y)
 
 def is_sampler(estimator):
     """Return True if the given estimator is a sampler, False otherwise.
@@ -165,7 +178,9 @@ def is_sampler(estimator):
     is_sampler : bool
         True if estimator is a sampler, otherwise False.
     """
-    pass
+    return (hasattr(estimator, 'fit_resample') and
+            hasattr(estimator, '_estimator_type') and
+            estimator._estimator_type == 'sampler')
 
 class FunctionSampler(BaseSampler):
     """Construct a sampler from calling an arbitrary callable.
@@ -283,7 +298,14 @@ class FunctionSampler(BaseSampler):
         self : object
             Return the instance itself.
         """
-        pass
+        if self.validate:
+            X, y = self._validate_data(X, y, reset=True,
+                                       accept_sparse=self.accept_sparse)
+            y = check_target_type(y)
+        self.sampling_strategy_ = check_sampling_strategy(
+            self.sampling_strategy, y, self._sampling_type
+        )
+        return self
 
     def fit_resample(self, X, y):
         """Resample the dataset.
@@ -304,4 +326,13 @@ class FunctionSampler(BaseSampler):
         y_resampled : array-like of shape (n_samples_new,)
             The corresponding label of `X_resampled`.
         """
-        pass
+        self.fit(X, y)
+        if self.func is None:
+            return X, y
+
+        if self.kw_args is None:
+            X_resampled, y_resampled = self.func(X, y)
+        else:
+            X_resampled, y_resampled = self.func(X, y, **self.kw_args)
+
+        return X_resampled, y_resampled
