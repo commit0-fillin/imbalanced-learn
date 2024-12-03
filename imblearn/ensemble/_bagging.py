@@ -250,12 +250,24 @@ class BalancedBaggingClassifier(_ParamsValidationMixin, BaggingClassifier):
     def _validate_estimator(self, default=DecisionTreeClassifier()):
         """Check the estimator and the n_estimator attribute, set the
         `estimator_` attribute."""
-        pass
+        if self.estimator is not None:
+            self.estimator_ = clone(self.estimator)
+        else:
+            self.estimator_ = clone(default)
+
+        if isinstance(self.estimator_, ClassifierMixin):
+            self._estimator_type = "classifier"
+        else:
+            raise ValueError(
+                f"Estimator {self.estimator_} must be a ClassifierMixin."
+            )
 
     @property
     def n_features_(self):
         """Number of features when ``fit`` is performed."""
-        pass
+        # Check if the estimator is fitted
+        check_is_fitted(self)
+        return self.estimators_[0].n_features_in_
 
     @_fit_context(prefer_skip_nested_validation=False)
     def fit(self, X, y):
@@ -276,7 +288,86 @@ class BalancedBaggingClassifier(_ParamsValidationMixin, BaggingClassifier):
         self : object
             Fitted estimator.
         """
-        pass
+        # Check that X and y have correct shape
+        X, y = self._validate_data(X, y, accept_sparse=['csr', 'csc'])
+
+        # Check parameters
+        self._validate_estimator()
+
+        # Convert y to categorical if needed
+        y = self._validate_y(y)
+
+        # Check parameters
+        self._validate_parameters()
+
+        # Remap output
+        n_samples, self.n_features_in_ = X.shape
+        self._n_samples = n_samples
+        y = np.copy(y)
+        self.classes_ = np.unique(y)
+        self.n_classes_ = len(self.classes_)
+
+        # Check sampling strategy
+        self.sampling_strategy_ = check_sampling_strategy(
+            self.sampling_strategy, y, self._sampling_type
+        )
+
+        # Validate max_samples
+        max_samples = self._validate_max_samples(n_samples)
+
+        # Create sampler object
+        if self.sampler is None:
+            self.sampler_ = RandomUnderSampler(
+                sampling_strategy=self.sampling_strategy_,
+                replacement=self.replacement,
+                random_state=self.random_state,
+            )
+        else:
+            self.sampler_ = clone(self.sampler)
+
+        # Parallel loop
+        n_jobs, n_estimators, starts = _partition_estimators(
+            self.n_estimators, self.n_jobs
+        )
+
+        # Avoid storing the output of every estimator by summing them here
+        if self.oob_score:
+            self.estimators_samples_ = np.zeros((n_samples, self.n_estimators),
+                                                dtype=np.int8)
+
+        # Build estimators
+        all_results = Parallel(n_jobs=n_jobs, verbose=self.verbose)(
+            delayed(_parallel_build_estimators)(
+                n_estimators[i],
+                self,
+                X,
+                y,
+                self.max_samples,
+                self.max_features,
+                self.bootstrap,
+                self.bootstrap_features,
+                self.oob_score,
+                self.sampling_strategy_,
+                self.replacement,
+                self.random_state,
+                self.verbose,
+                support_sample_weight=False,
+                seeds=None,
+                sampler=self.sampler_,
+                estimator_params=self.estimator_params,
+            )
+            for i, _ in enumerate(starts)
+        )
+
+        # Reduce
+        self.estimators_ = list(itertools.chain.from_iterable(
+            t[0] for t in all_results))
+        self.n_features_ = self.estimators_[0].n_features_in_
+
+        if self.oob_score:
+            self.oob_score_ = self._compute_oob_score(X, y)
+
+        return self
 
     @available_if(_estimator_has('decision_function'))
     def decision_function(self, X):
@@ -296,9 +387,37 @@ class BalancedBaggingClassifier(_ParamsValidationMixin, BaggingClassifier):
             ``classes_``. Regression and binary classification are special
             cases with ``k == 1``, otherwise ``k==n_classes``.
         """
-        pass
+        check_is_fitted(self)
+        
+        # Check data
+        X = self._validate_data(
+            X, accept_sparse=['csr', 'csc'], reset=False,
+            dtype=None, force_all_finite=False
+        )
+
+        # Parallel loop
+        n_jobs, _, starts = _partition_estimators(self.n_estimators, self.n_jobs)
+
+        all_decisions = Parallel(n_jobs=n_jobs, verbose=self.verbose)(
+            delayed(_parallel_decision_function)(
+                self.estimators_[starts[i]:starts[i + 1]],
+                self.estimators_features_[starts[i]:starts[i + 1]],
+                X
+            )
+            for i in range(n_jobs)
+        )
+
+        # Reduce
+        decisions = sum(all_decisions) / self.n_estimators
+
+        return decisions
 
     @property
     def base_estimator_(self):
         """Attribute for older sklearn version compatibility."""
-        pass
+        warnings.warn(
+            "Attribute `base_estimator_` was deprecated in version 0.24 and "
+            "will be removed in 0.26. Use `estimator_` instead.",
+            FutureWarning
+        )
+        return self.estimator_
