@@ -11,4 +11,17 @@ Y = np.array([1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 0, 1, 0])
 def test_tomek_links_strings(sampling_strategy):
     """Check that we support all supposed strings as `sampling_strategy` in
     a sampler inheriting from `BaseCleaningSampler`."""
-    pass
+    tomek = TomekLinks(sampling_strategy=sampling_strategy)
+    X_resampled, y_resampled = tomek.fit_resample(X, Y)
+    
+    # Check that the resampled data is different from the original
+    assert not np.array_equal(X_resampled, X) or not np.array_equal(y_resampled, Y)
+    
+    # Check that the resampled data has the same number of features
+    assert X_resampled.shape[1] == X.shape[1]
+    
+    # Check that the number of samples in X_resampled matches y_resampled
+    assert X_resampled.shape[0] == y_resampled.shape[0]
+    
+    # Check that the resampled data contains only the original class labels
+    assert set(np.unique(y_resampled)).issubset(set(np.unique(Y)))
