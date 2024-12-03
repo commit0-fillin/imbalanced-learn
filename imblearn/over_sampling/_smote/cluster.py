@@ -142,4 +142,20 @@ class KMeansSMOTE(BaseSMOTE):
 
     def _find_cluster_sparsity(self, X):
         """Compute the cluster sparsity."""
-        pass
+        n_samples, n_features = X.shape
+        cluster_labels = self.kmeans_estimator_.labels_
+        unique_labels = np.unique(cluster_labels)
+        
+        sparsity = np.zeros(len(unique_labels))
+        for i, label in enumerate(unique_labels):
+            cluster_samples = X[cluster_labels == label]
+            cluster_size = len(cluster_samples)
+            
+            if cluster_size > 1:
+                distances = pairwise_distances(cluster_samples)
+                avg_distance = np.sum(distances) / (cluster_size * (cluster_size - 1))
+                sparsity[i] = avg_distance / np.sqrt(n_features)
+            else:
+                sparsity[i] = 0
+        
+        return sparsity
