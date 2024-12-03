@@ -183,26 +183,211 @@ class RUSBoostClassifier(_ParamsValidationMixin, AdaBoostClassifier):
         self : object
             Returns self.
         """
-        pass
+        # Check that algorithm is supported
+        if self.algorithm not in ('SAMME', 'SAMME.R'):
+            raise ValueError("algorithm %s is not supported" % self.algorithm)
+
+        # Validate parameters
+        self._validate_estimator()
+
+        # Check inputs
+        X, y = self._validate_data(X, y, accept_sparse=['csr', 'csc'],
+                                   ensure_2d=True, allow_nd=False,
+                                   dtype=None,
+                                   y_numeric=is_regressor(self))
+
+        if sample_weight is None:
+            # Initialize weights to 1 / n_samples
+            sample_weight = np.empty(X.shape[0], dtype=np.float64)
+            sample_weight[:] = 1. / X.shape[0]
+        else:
+            sample_weight = _check_sample_weight(sample_weight, X, np.float64)
+
+        # Check that the sample weights sum is positive
+        if sample_weight.sum() <= 0:
+            raise ValueError(
+                "Attempting to fit with a non-positive "
+                "weighted number of samples."
+            )
+
+        # Check parameters
+        self._validate_params()
+
+        # Clear any previous fit results
+        self.estimators_ = []
+        self.estimator_weights_ = np.zeros(self.n_estimators, dtype=np.float64)
+        self.estimator_errors_ = np.ones(self.n_estimators, dtype=np.float64)
+
+        random_state = check_random_state(self.random_state)
+
+        for iboost in range(self.n_estimators):
+            # Random under-sampling
+            X_resampled, y_resampled, sample_weight_resampled = self._make_sampler().fit_resample(
+                X, y, sample_weight=sample_weight
+            )
+
+            # Boosting step
+            sample_weight_resampled, estimator_weight, estimator_error = self._boost(
+                iboost,
+                X_resampled, y_resampled,
+                sample_weight_resampled,
+                random_state
+            )
+
+            # Early termination
+            if sample_weight_resampled is None:
+                break
+
+            self.estimator_weights_[iboost] = estimator_weight
+            self.estimator_errors_[iboost] = estimator_error
+
+            # Stop if error is zero
+            if estimator_error == 0:
+                break
+
+            sample_weight = sample_weight_resampled
+
+        return self
 
     def _validate_estimator(self):
         """Check the estimator and the n_estimator attribute.
 
         Sets the `estimator_` attributes.
         """
-        pass
+        super()._validate_estimator()
+
+        if self.estimator is None:
+            self.estimator_ = DecisionTreeClassifier(max_depth=1)
+        else:
+            self.estimator_ = clone(self.estimator)
+
+        if not has_fit_parameter(self.estimator_, "sample_weight"):
+            raise ValueError(f"{self.estimator_.__class__.__name__} doesn't "
+                             "support sample_weight.")
 
     def _make_sampler_estimator(self, append=True, random_state=None):
         """Make and configure a copy of the `base_estimator_` attribute.
         Warning: This method should be used to properly instantiate new
         sub-estimators.
         """
-        pass
+        estimator = clone(self.estimator_)
+        estimator.set_params(**{p: getattr(self, p)
+                                for p in self.estimator_params})
+
+        if random_state is not None:
+            _set_random_states(estimator, random_state)
+
+        if append:
+            self.estimators_.append(estimator)
+
+        return estimator
 
     def _boost_real(self, iboost, X, y, sample_weight, random_state):
         """Implement a single boost using the SAMME.R real algorithm."""
-        pass
+        estimator = self._make_sampler_estimator(append=True,
+                                                 random_state=random_state)
+
+        estimator.fit(X, y, sample_weight=sample_weight)
+
+        y_predict_proba = estimator.predict_proba(X)
+
+        if iboost == 0:
+            self.classes_ = getattr(estimator, 'classes_', None)
+            self.n_classes_ = len(self.classes_)
+
+        y_predict = self.classes_.take(np.argmax(y_predict_proba, axis=1),
+                                       axis=0)
+
+        # Instances incorrectly classified
+        incorrect = y_predict != y
+
+        # Error fraction
+        estimator_error = np.mean(
+            np.average(incorrect, weights=sample_weight, axis=0)
+        )
+
+        # Stop if classification is perfect
+        if estimator_error <= 0:
+            return sample_weight, 1., 0.
+
+        # Construct y coding as described in Zhu et al [2]:
+        #
+        #    y_k = 1 if c == k else -1 / (K - 1)
+        #
+        # where K == n_classes_ and c, k in [0, K) are indices along the second
+        # axis of the y coding with c being the index corresponding to the true
+        # class label.
+        n_classes = self.n_classes_
+        classes = self.classes_
+        y_codes = np.array([-1. / (n_classes - 1), 1.])
+        y_coding = y_codes.take(classes == y[:, np.newaxis])
+
+        # Displace zero probabilities so the log is defined.
+        # Also fix negative elements which may occur with
+        # negative sample weights.
+        proba = y_predict_proba  # alias for readability
+        np.clip(proba, np.finfo(proba.dtype).eps, None, out=proba)
+
+        # Boost weight using multi-class AdaBoost SAMME.R alg
+        estimator_weight = (-1. * self.learning_rate
+                            * (((n_classes - 1.) / n_classes) *
+                               inner1d(y_coding, np.log(y_predict_proba))))
+
+        # Only boost the weights if it will fit again
+        if not iboost == self.n_estimators - 1:
+            # Only boost positive weights
+            sample_weight *= np.exp(estimator_weight *
+                                    ((sample_weight > 0) |
+                                     (estimator_weight < 0)))
+
+        return sample_weight, 1., estimator_error
 
     def _boost_discrete(self, iboost, X, y, sample_weight, random_state):
         """Implement a single boost using the SAMME discrete algorithm."""
-        pass
+        estimator = self._make_sampler_estimator(append=True,
+                                                 random_state=random_state)
+
+        estimator.fit(X, y, sample_weight=sample_weight)
+
+        y_predict = estimator.predict(X)
+
+        if iboost == 0:
+            self.classes_ = getattr(estimator, 'classes_', None)
+            self.n_classes_ = len(self.classes_)
+
+        # Instances incorrectly classified
+        incorrect = y_predict != y
+
+        # Error fraction
+        estimator_error = np.mean(
+            np.average(incorrect, weights=sample_weight, axis=0)
+        )
+
+        # Stop if classification is perfect
+        if estimator_error <= 0:
+            return sample_weight, 1., 0.
+
+        n_classes = self.n_classes_
+
+        # Stop if the error is at least as bad as random guessing
+        if estimator_error >= 1. - (1. / n_classes):
+            self.estimators_.pop(-1)
+            if len(self.estimators_) == 0:
+                raise ValueError('BaseClassifier in AdaBoostClassifier '
+                                 'ensemble is worse than random, ensemble '
+                                 'can not be fit.')
+            return None, None, None
+
+        # Boost weight using multi-class AdaBoost SAMME alg
+        estimator_weight = self.learning_rate * (
+            np.log((1. - estimator_error) / estimator_error) +
+            np.log(n_classes - 1.))
+
+        # Only boost the weights if I will fit again
+        if not iboost == self.n_estimators - 1:
+            # Only boost positive weights
+            sample_weight *= np.exp(estimator_weight * incorrect *
+                                    ((sample_weight > 0) |
+                                     (estimator_weight < 0)))
+
+        return sample_weight, estimator_weight, estimator_error
