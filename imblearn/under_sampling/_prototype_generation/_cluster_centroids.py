@@ -111,4 +111,16 @@ class ClusterCentroids(BaseUnderSampler):
 
     def _validate_estimator(self):
         """Private function to create the KMeans estimator"""
-        pass
+        if self.estimator is None:
+            self.estimator_ = KMeans(random_state=self.random_state)
+        elif isinstance(self.estimator, (str, type)):
+            self.estimator_ = clone(KMeans(random_state=self.random_state))
+        else:
+            self.estimator_ = clone(self.estimator)
+
+        if not hasattr(self.estimator_, 'fit'):
+            raise ValueError("The estimator must implement a 'fit' method.")
+        if not hasattr(self.estimator_, 'predict'):
+            raise ValueError("The estimator must implement a 'predict' method.")
+        if not hasattr(self.estimator_, 'n_clusters'):
+            raise ValueError("The estimator must have an 'n_clusters' attribute.")
