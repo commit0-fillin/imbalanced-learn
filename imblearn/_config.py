@@ -15,7 +15,9 @@ if sklearn_version < parse_version('1.3'):
     def _get_threadlocal_config():
         """Get a threadlocal **mutable** configuration. If the configuration
         does not exist, copy the default global configuration."""
-        pass
+        if not hasattr(_threadlocal, "config"):
+            _threadlocal.config = _global_config.copy()
+        return _threadlocal.config
 
     def get_config():
         """Retrieve current values for configuration set by :func:`set_config`.
@@ -30,7 +32,7 @@ if sklearn_version < parse_version('1.3'):
         config_context : Context manager for global scikit-learn configuration.
         set_config : Set global scikit-learn configuration.
         """
-        pass
+        return {k: v for k, v in _get_threadlocal_config().items()}
 
     def set_config(assume_finite=None, working_memory=None, print_changed_only=None, display=None, pairwise_dist_chunk_size=None, enable_cython_pairwise_dist=None, transform_output=None, enable_metadata_routing=None, skip_parameter_validation=None):
         """Set global scikit-learn configuration
@@ -133,7 +135,23 @@ if sklearn_version < parse_version('1.3'):
         config_context : Context manager for global scikit-learn configuration.
         get_config : Retrieve current values of the global configuration.
         """
-        pass
+        local_config = _get_threadlocal_config()
+
+        params = {
+            "assume_finite": assume_finite,
+            "working_memory": working_memory,
+            "print_changed_only": print_changed_only,
+            "display": display,
+            "pairwise_dist_chunk_size": pairwise_dist_chunk_size,
+            "enable_cython_pairwise_dist": enable_cython_pairwise_dist,
+            "transform_output": transform_output,
+            "enable_metadata_routing": enable_metadata_routing,
+            "skip_parameter_validation": skip_parameter_validation,
+        }
+
+        for param, value in params.items():
+            if value is not None:
+                local_config[param] = value
 
     @contextmanager
     def config_context(*, assume_finite=None, working_memory=None, print_changed_only=None, display=None, pairwise_dist_chunk_size=None, enable_cython_pairwise_dist=None, transform_output=None, enable_metadata_routing=None, skip_parameter_validation=None):
@@ -258,6 +276,21 @@ if sklearn_version < parse_version('1.3'):
         ...
         ValueError: Input contains NaN...
         """
-        pass
+        old_config = get_config().copy()
+        set_config(
+            assume_finite=assume_finite,
+            working_memory=working_memory,
+            print_changed_only=print_changed_only,
+            display=display,
+            pairwise_dist_chunk_size=pairwise_dist_chunk_size,
+            enable_cython_pairwise_dist=enable_cython_pairwise_dist,
+            transform_output=transform_output,
+            enable_metadata_routing=enable_metadata_routing,
+            skip_parameter_validation=skip_parameter_validation,
+        )
+        try:
+            yield
+        finally:
+            set_config(**old_config)
 else:
     from sklearn._config import _get_threadlocal_config, _global_config, config_context, get_config
