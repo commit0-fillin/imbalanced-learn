@@ -123,6 +123,14 @@ class EditedNearestNeighbours(BaseCleaningSampler):
         self.nn_ = check_neighbors_object('n_neighbors', self.n_neighbors)
         self.nn_.set_params(**{'n_neighbors': self.n_neighbors + 1})
 
+        # Ensure n_neighbors is at least 2
+        if self.n_neighbors < 2:
+            raise ValueError("n_neighbors must be greater than 1.")
+
+        # Set n_jobs parameter if provided
+        if self.n_jobs is not None:
+            self.nn_.set_params(**{'n_jobs': self.n_jobs})
+
 @Substitution(sampling_strategy=BaseCleaningSampler._sampling_strategy_docstring, n_jobs=_n_jobs_docstring)
 class RepeatedEditedNearestNeighbours(BaseCleaningSampler):
     """Undersample based on the repeated edited nearest neighbour method.
