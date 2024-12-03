@@ -39,7 +39,7 @@ class BaseSMOTE(BaseOverSampler):
         """Check the NN estimators shared across the different SMOTE
         algorithms.
         """
-        pass
+        self.nn_k_ = check_neighbors_object('k_neighbors', self.k_neighbors)
 
     def _make_samples(self, X, y_dtype, y_type, nn_data, nn_num, n_samples, step_size=1.0, y=None):
         """A support function that returns artificial samples constructed along
@@ -82,7 +82,16 @@ class BaseSMOTE(BaseOverSampler):
         y_new : ndarray of shape (n_samples_new,)
             Target values for synthetic samples.
         """
-        pass
+        random_state = check_random_state(self.random_state)
+        samples_indices = random_state.randint(low=0, high=nn_num.size, size=n_samples)
+        steps = step_size * random_state.uniform(size=n_samples)
+        rows = samples_indices // nn_num.shape[1]
+        cols = samples_indices % nn_num.shape[1]
+
+        X_new = self._generate_samples(X, nn_data, nn_num, rows, cols, steps, y_type, y)
+        y_new = np.full(n_samples, fill_value=y_type, dtype=y_dtype)
+
+        return X_new, y_new
 
     def _generate_samples(self, X, nn_data, nn_num, rows, cols, steps, y_type=None, y=None):
         """Generate a synthetic sample.
@@ -132,7 +141,60 @@ class BaseSMOTE(BaseOverSampler):
         X_new : {ndarray, sparse matrix} of shape (n_samples, n_features)
             Synthetically generated samples.
         """
-        pass
+        if issparse(X):
+            return self._generate_samples_sparse(X, nn_data, nn_num, rows, cols, steps)
+        else:
+            return self._generate_samples_dense(X, nn_data, nn_num, rows, cols, steps)
+
+    def _generate_samples_dense(self, X, nn_data, nn_num, rows, cols, steps):
+        X_new = np.zeros((steps.shape[0], X.shape[1]))
+        for i, (row, col, step) in enumerate(zip(rows, cols, steps)):
+            X_new[i] = X[row] - step * (X[row] - nn_data[nn_num[row, col]])
+        return X_new
+
+    def _generate_samples_sparse(self, X, nn_data, nn_num, rows, cols, steps):
+        n_samples, n_features = X.shape
+        rows = rows.astype(int)
+        cols = cols.astype(int)
+
+        data = X.data.copy()
+        indptr = X.indptr.copy()
+        indices = X.indices.copy()
+
+        new_data = []
+        new_indices = []
+        new_indptr = [0]
+
+        for i, (row, col, step) in enumerate(zip(rows, cols, steps)):
+            start = indptr[row]
+            end = indptr[row + 1]
+            
+            # Find the features that are non-zero in either the current sample or its neighbor
+            current_indices = indices[start:end]
+            nn_start = nn_data.indptr[nn_num[row, col]]
+            nn_end = nn_data.indptr[nn_num[row, col] + 1]
+            nn_indices = nn_data.indices[nn_start:nn_end]
+            all_indices = np.union1d(current_indices, nn_indices)
+            
+            for idx in all_indices:
+                if idx in current_indices:
+                    current_val = data[start + np.where(current_indices == idx)[0][0]]
+                else:
+                    current_val = 0
+                
+                if idx in nn_indices:
+                    nn_val = nn_data.data[nn_start + np.where(nn_indices == idx)[0][0]]
+                else:
+                    nn_val = 0
+                
+                new_val = current_val - step * (current_val - nn_val)
+                if new_val != 0:
+                    new_data.append(new_val)
+                    new_indices.append(idx)
+            
+            new_indptr.append(len(new_indices))
+
+        return csr_matrix((new_data, new_indices, new_indptr), shape=(steps.shape[0], n_features))
 
     def _in_danger_noise(self, nn_estimator, samples, target_class, y, kind='danger'):
         """Estimate if a set of sample are in danger or noise.
@@ -166,7 +228,18 @@ class BaseSMOTE(BaseOverSampler):
         output : ndarray of shape (n_samples,)
             A boolean array where True refer to samples in danger or noise.
         """
-        pass
+        x = nn_estimator.kneighbors(samples, return_distance=False)[:, 1:]
+        nn_label = (y[x] != target_class).astype(int)
+        n_maj = np.sum(nn_label, axis=1)
+
+        if kind == 'danger':
+            # Samples are in danger if there are more than 50% of majority samples in their neighborhood
+            return np.ravel(n_maj > (nn_estimator.n_neighbors - 1) // 2)
+        elif kind == 'noise':
+            # Samples are noise if all neighbors are from the majority class
+            return np.ravel(n_maj == nn_estimator.n_neighbors - 1)
+        else:
+            raise ValueError("'kind' should be either 'danger' or 'noise'.")
 
 @Substitution(sampling_strategy=BaseOverSampler._sampling_strategy_docstring, n_jobs=_n_jobs_docstring, random_state=_random_state_docstring)
 class SMOTE(BaseSMOTE):
@@ -435,16 +508,48 @@ class SMOTENC(SMOTE):
         super().__init__(sampling_strategy=sampling_strategy, random_state=random_state, k_neighbors=k_neighbors, n_jobs=n_jobs)
         self.categorical_features = categorical_features
         self.categorical_encoder = categorical_encoder
+        self._validate_categorical_features()
+        
+    def _validate_categorical_features(self):
+        if isinstance(self.categorical_features, str) and self.categorical_features != "auto":
+            raise ValueError("categorical_features must be 'auto', array-like or a boolean mask")
+        elif isinstance(self.categorical_features, (list, tuple, np.ndarray)):
+            self.categorical_features = np.array(self.categorical_features)
+        elif isinstance(self.categorical_features, bool):
+            self.categorical_features = np.array([self.categorical_features])
+        elif self.categorical_features != "auto":
+            raise ValueError("categorical_features must be 'auto', array-like or a boolean mask")
 
     def _check_X_y(self, X, y):
         """Overwrite the checking to let pass some string for categorical
         features.
         """
-        pass
+        X, y = self._validate_data(
+            X, y, reset=True, validate_separately=False,
+            accept_sparse=['csr', 'csc'], dtype=None,
+            force_all_finite='allow-nan'
+        )
+        y = check_array(y, ensure_2d=False, dtype=None)
+        return X, y
 
     def _validate_column_types(self, X):
         """Compute the indices of the categorical and continuous features."""
-        pass
+        if self.categorical_features == "auto":
+            if not _is_pandas_df(X):
+                raise ValueError("When categorical_features is 'auto', X must be a pandas DataFrame")
+            self.categorical_features_ = X.select_dtypes(include=['object', 'category']).columns.tolist()
+            self.continuous_features_ = X.select_dtypes(exclude=['object', 'category']).columns.tolist()
+        else:
+            if isinstance(self.categorical_features, bool):
+                self.categorical_features_ = np.arange(X.shape[1])[self.categorical_features]
+            else:
+                self.categorical_features_ = np.array(self.categorical_features)
+            self.continuous_features_ = np.setdiff1d(np.arange(X.shape[1]), self.categorical_features_)
+        
+        if len(self.categorical_features_) == 0:
+            raise ValueError("No categorical features found in the data. SMOTENC cannot be applied.")
+        if len(self.continuous_features_) == 0:
+            raise ValueError("No continuous features found in the data. Use SMOTEN instead of SMOTENC.")
 
     def _generate_samples(self, X, nn_data, nn_num, rows, cols, steps, y_type, y=None):
         """Generate a synthetic sample with an additional steps for the
@@ -454,12 +559,27 @@ class SMOTENC(SMOTE):
         categorical features are mapped to the most frequent nearest neighbors
         of the majority class.
         """
-        pass
+        X_new = np.zeros((steps.shape[0], X.shape[1]))
+        
+        for feature_idx in range(X.shape[1]):
+            if feature_idx in self.continuous_features_:
+                X_new[:, feature_idx] = X[rows, feature_idx] + steps * (
+                    X[nn_num[rows, cols], feature_idx] - X[rows, feature_idx]
+                )
+            else:
+                X_new[:, feature_idx] = X[nn_num[rows, cols], feature_idx]
+        
+        return X_new
 
     @property
     def ohe_(self):
         """One-hot encoder used to encode the categorical features."""
-        pass
+        warnings.warn(
+            "`ohe_` is deprecated in 0.11 and will be removed in 0.13. "
+            "Use `categorical_encoder_` instead.",
+            DeprecationWarning
+        )
+        return self.categorical_encoder_
 
 @Substitution(sampling_strategy=BaseOverSampler._sampling_strategy_docstring, n_jobs=_n_jobs_docstring, random_state=_random_state_docstring)
 class SMOTEN(SMOTE):
@@ -577,8 +697,21 @@ class SMOTEN(SMOTE):
 
     def _check_X_y(self, X, y):
         """Check should accept strings and not sparse matrices."""
-        pass
+        if issparse(X):
+            raise ValueError("SMOTEN does not support sparse input. Please convert X to a dense numpy array or pandas DataFrame.")
+        
+        X, y = self._validate_data(
+            X, y, reset=True, validate_separately=False,
+            dtype=None, force_all_finite=False
+        )
+        y = check_array(y, ensure_2d=False, dtype=None)
+        
+        if not np.all([isinstance(x, (str, int, np.integer)) for x in X.ravel()]):
+            raise ValueError("SMOTEN supports only string and integer categorical features.")
+        
+        return X, y
 
     def _validate_estimator(self):
         """Force to use precomputed distance matrix."""
-        pass
+        self.nn_k_ = check_neighbors_object('k_neighbors', self.k_neighbors, additional_neighbor=1)
+        self.nn_k_.set_params(**{'metric': 'precomputed'})
