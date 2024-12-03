@@ -106,4 +106,21 @@ class InstanceHardnessThreshold(BaseUnderSampler):
 
     def _validate_estimator(self, random_state):
         """Private function to create the classifier"""
-        pass
+        if self.estimator is None:
+            estimator = RandomForestClassifier(
+                n_estimators=10,
+                random_state=random_state,
+                n_jobs=self.n_jobs
+            )
+        else:
+            estimator = clone(self.estimator)
+
+        if isinstance(estimator, RandomForestClassifier):
+            _set_random_states(estimator, random_state)
+
+        if not hasattr(estimator, "predict_proba"):
+            raise ValueError(
+                f"{estimator.__class__.__name__} doesn't have predict_proba method."
+            )
+
+        return estimator
