@@ -20,4 +20,18 @@ Y = np.array([1, 2, 2, 2, 1, 0, 1, 1, 1, 0])
 
 def test_easy_ensemble_classifier_n_features():
     """Check that we raise a FutureWarning when accessing `n_features_`."""
-    pass
+    X, y = make_imbalance(
+        iris.data,
+        iris.target,
+        sampling_strategy={0: 20, 1: 25, 2: 50},
+        random_state=RND_SEED,
+    )
+    eec = EasyEnsembleClassifier(random_state=RND_SEED, n_estimators=5)
+    eec.fit(X, y)
+
+    with pytest.warns(FutureWarning, match="`n_features_` attribute is deprecated"):
+        _ = eec.n_features_
+
+    # Check that n_features_in_ is set
+    assert hasattr(eec, "n_features_in_")
+    assert eec.n_features_in_ == X.shape[1]
