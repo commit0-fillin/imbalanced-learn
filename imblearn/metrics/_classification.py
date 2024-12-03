@@ -409,7 +409,26 @@ def geometric_mean_score(y_true, y_pred, *, labels=None, pos_label=1, average='m
     >>> geometric_mean_score(y_true, y_pred, average=None)
     array([0.866...,  0.       ,  0.       ])
     """
-    pass
+    sen, spe, sup = sensitivity_specificity_support(
+        y_true, y_pred, labels=labels, pos_label=pos_label,
+        average=average, sample_weight=sample_weight)
+
+    if average == 'multiclass':
+        if np.any(sen == 0) and correction == 0:
+            return 0
+        else:
+            sen = np.where(sen == 0, correction, sen)
+            return sp.stats.gmean(sen)
+    elif average == 'macro':
+        return sp.stats.gmean(sen)
+    elif average == 'micro':
+        return np.sqrt(sen * spe)
+    elif average == 'weighted':
+        return np.average(sp.stats.gmean([sen, spe], axis=0), weights=sup)
+    elif average is None:
+        return sp.stats.gmean([sen, spe], axis=0)
+    else:
+        raise ValueError("Unsupported average type")
 
 @validate_params({'alpha': [numbers.Real], 'squared': ['boolean']}, prefer_skip_nested_validation=True)
 def make_index_balanced_accuracy(*, alpha=0.1, squared=True):
@@ -461,7 +480,16 @@ def make_index_balanced_accuracy(*, alpha=0.1, squared=True):
     >>> print(gmean(y_true, y_pred, average=None))
     [0.44...  0.44...]
     """
-    pass
+    def iba_scoring_func(scoring_func):
+        @functools.wraps(scoring_func)
+        def wrapped_scoring_func(y_true, y_pred, **kwargs):
+            score = scoring_func(y_true, y_pred, **kwargs)
+            sen, spe = sensitivity_specificity_support(y_true, y_pred, average=None)[:2]
+            if squared:
+                score = score**2
+            return (1 + alpha * (sen - spe)) * score
+        return wrapped_scoring_func
+    return iba_scoring_func
 
 @validate_params({'y_true': ['array-like'], 'y_pred': ['array-like'], 'labels': ['array-like', None], 'target_names': ['array-like', None], 'sample_weight': ['array-like', None], 'digits': [Interval(numbers.Integral, 0, None, closed='left')], 'alpha': [numbers.Real], 'output_dict': ['boolean'], 'zero_division': [StrOptions({'warn'}), Interval(numbers.Integral, 0, 1, closed='both')]}, prefer_skip_nested_validation=True)
 def classification_report_imbalanced(y_true, y_pred, *, labels=None, target_names=None, sample_weight=None, digits=2, alpha=0.1, output_dict=False, zero_division='warn'):
@@ -591,4 +619,36 @@ def macro_averaged_mean_absolute_error(y_true, y_pred, *, sample_weight=None):
     >>> macro_averaged_mean_absolute_error(y_true_imbalanced, y_pred)
     0.16...
     """
-    pass
+    y_true = np.asarray(y_true)
+    y_pred = np.asarray(y_pred)
+
+    if y_true.ndim == 1:
+        y_true = y_true.reshape((-1, 1))
+
+    if y_pred.ndim == 1:
+        y_pred = y_pred.reshape((-1, 1))
+
+    if y_true.shape != y_pred.shape:
+        raise ValueError("y_true and y_pred must have the same shape")
+
+    n_outputs = y_true.shape[1]
+    mae = np.zeros(n_outputs)
+
+    for k in range(n_outputs):
+        y_true_k = y_true[:, k]
+        y_pred_k = y_pred[:, k]
+        
+        unique_classes = np.unique(y_true_k)
+        class_mae = []
+
+        for c in unique_classes:
+            mask = y_true_k == c
+            if np.any(mask):
+                class_mae.append(mean_absolute_error(
+                    y_true_k[mask], y_pred_k[mask], 
+                    sample_weight=sample_weight[mask] if sample_weight is not None else None
+                ))
+
+        mae[k] = np.mean(class_mae)
+
+    return mae.squeeze()
