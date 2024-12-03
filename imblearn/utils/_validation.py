@@ -38,7 +38,8 @@ def _is_neighbors_object(estimator):
     is_neighbors_object : bool
         True if the estimator exposes a KNeighborsMixin-like API.
     """
-    pass
+    return (hasattr(estimator, 'kneighbors') and
+            hasattr(estimator, 'kneighbors_graph'))
 
 def check_neighbors_object(nn_name, nn_object, additional_neighbor=0):
     """Check the objects is consistent to be a k nearest neighbors.
@@ -64,7 +65,13 @@ def check_neighbors_object(nn_name, nn_object, additional_neighbor=0):
     nn_object : KNeighborsMixin
         The k-NN object.
     """
-    pass
+    if isinstance(nn_object, int):
+        return NearestNeighbors(n_neighbors=nn_object + additional_neighbor)
+    elif _is_neighbors_object(nn_object):
+        return clone(nn_object)
+    else:
+        raise ValueError(f"{nn_name} has to be a int or an object with a "
+                         "KNeighborsMixin-like API.")
 
 def check_target_type(y, indicate_one_vs_all=False):
     """Check the target types to be conform to the current samplers.
@@ -89,7 +96,21 @@ def check_target_type(y, indicate_one_vs_all=False):
         Indicate if the target was originally encoded in a one-vs-all fashion.
         Only returned if ``indicate_multilabel=True``.
     """
-    pass
+    y_type = type_of_target(y)
+    if y_type not in TARGET_KIND:
+        raise ValueError(f"'y' should be one of {TARGET_KIND}. Got '{y_type}' instead.")
+
+    y_ = np.array(y)
+    if y_type == 'binary':
+        y_ = column_or_1d(y_)
+        classes = np.unique(y_)
+        if len(classes) != 2:
+            raise ValueError(f"'y' should have exactly 2 classes. Got {len(classes)} classes.")
+
+    if not indicate_one_vs_all:
+        return y_
+    else:
+        return y_, y_type == 'multilabel-indicator'
 
 def _sampling_strategy_all(y, sampling_type):
     """Returns sampling target by targeting all classes."""
