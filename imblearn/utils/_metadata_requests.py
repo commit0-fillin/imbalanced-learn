@@ -101,7 +101,7 @@ if parse_version(sklearn_version.base_version) < parse_version('1.4'):
             Whether metadata routing is enabled. If the config is not set, it
             defaults to False.
         """
-        pass
+        return get_config().get("enable_metadata_routing", False)
 
     def _raise_for_params(params, owner, method):
         """Raise an error if metadata routing is not enabled and params are passed.
@@ -124,7 +124,12 @@ if parse_version(sklearn_version.base_version) < parse_version('1.4'):
         ValueError
             If metadata routing is not enabled and params are passed.
         """
-        pass
+        if not _routing_enabled() and params:
+            raise ValueError(
+                f"Metadata routing is not enabled, but {method} of {owner} "
+                f"received metadata: {list(params.keys())}. "
+                "Enable it using sklearn.set_config(enable_metadata_routing=True)."
+            )
 
     def _raise_for_unsupported_routing(obj, method, **kwargs):
         """Raise when metadata routing is enabled and metadata is passed.
@@ -146,7 +151,12 @@ if parse_version(sklearn_version.base_version) < parse_version('1.4'):
         **kwargs : dict
             The metadata passed to the method.
         """
-        pass
+        if _routing_enabled() and kwargs:
+            raise ValueError(
+                f"Metadata routing is enabled, but {method} of {obj.__class__.__name__} "
+                f"received metadata: {list(kwargs.keys())}. "
+                f"This {obj.__class__.__name__} does not support metadata routing."
+            )
 
     class _RoutingNotSupportedMixin:
         """A mixin to be used to remove the default `get_metadata_routing`.
